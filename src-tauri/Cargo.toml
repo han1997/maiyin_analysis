@@ -1,0 +1,28 @@
+[package]
+name = "maiyin-analysis"
+version = "0.1.0"
+description = "Local hotel stay analysis for Tauri"
+authors = ["han1997"]
+edition = "2021"
+
+[lib]
+name = "maiyin_analysis_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+calamine = { version = "0.36.0", features = ["dates"] }
+chrono = { version = "0.4.41", features = ["serde"] }
+csv = "1.4.0"
+encoding_rs = "0.8.35"
+rust_xlsxwriter = "0.96.0"
+regex = "1.12.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-dialog = "2.7.1"
+thiserror = "2.0.17"
+uuid = { version = "1.18.1", features = ["v4", "serde"] }
+walkdir = "2.5.0"
