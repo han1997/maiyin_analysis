@@ -286,9 +286,78 @@ fn read_workbook(path: &Path) -> Result<Vec<Vec<String>>, AppError> {
             best_rows = rows;
         }
     }
-    (!best_rows.is_empty())
-        .then_some(best_rows)
-        .ok_or_else(|| AppError::Empty(format!("{} 中没有可读取的数据工作表", file_name(path))))
+    if !best_rows.is_empty() {
+        return Ok(best_rows);
+    }
+    if extension(path) == "xls" {
+        if let Some(rows) = read_legacy_xls(path)? {
+            return Ok(rows);
+        }
+    }
+    Err(AppError::Empty(format!(
+        "{} 中没有可读取的数据工作表",
+        file_name(path)
+    )))
+}
+
+fn read_legacy_xls(path: &Path) -> Result<Option<Vec<Vec<String>>>, AppError> {
+    let bytes = fs::read(path)?;
+    let workbook = rxls::Workbook::open(&bytes)
+        .map_err(|error| AppError::Parse(format!("{}：{error}", file_name(path))))?;
+    let mut best_rows = Vec::new();
+    let mut best_score = 0;
+
+    for sheet in &workbook.sheets {
+        let cells = sheet
+            .cells()
+            .filter_map(|(row, column, cell)| {
+                let value = cell.to_string();
+                if value.trim().is_empty() {
+                    return None;
+                }
+                Some((row as usize + 1, column as usize + 1, value))
+            })
+            .collect::<Vec<_>>();
+        let Some(rows) = legacy_cells_to_rows(cells) else {
+            continue;
+        };
+
+        if detect_template_data_start(&rows).is_some() {
+            return Ok(Some(rows));
+        }
+        let (_, indexes, score) = detect_header_row(&rows);
+        if indexes.get("id_no").is_some_and(|items| !items.is_empty())
+            && indexes
+                .get("check_in")
+                .is_some_and(|items| !items.is_empty())
+        {
+            return Ok(Some(rows));
+        }
+        if infer_core_fields(&rows, indexes).is_some() {
+            return Ok(Some(rows));
+        }
+        if score > best_score {
+            best_score = score;
+            best_rows = rows;
+        }
+    }
+
+    Ok((!best_rows.is_empty()).then_some(best_rows))
+}
+
+fn legacy_cells_to_rows(cells: Vec<(usize, usize, String)>) -> Option<Vec<Vec<String>>> {
+    let max_row = cells.iter().map(|(row, _, _)| *row).max()?;
+    let max_column = cells
+        .iter()
+        .map(|(_, column, _)| *column)
+        .max()
+        .unwrap_or(0);
+    let mut rows = vec![vec![String::new(); max_column]; max_row];
+    for (row, column, value) in cells {
+        rows[row - 1][column - 1] = value;
+    }
+    rows.retain(|row| row.iter().any(|value| !value.trim().is_empty()));
+    Some(rows)
 }
 
 fn read_csv(path: &Path) -> Result<Vec<Vec<String>>, AppError> {
@@ -697,7 +766,7 @@ fn file_name(path: &Path) -> String {
 
 #[cfg(test)]
 mod discovery_tests {
-    use super::discover_supported_files;
+    use super::{discover_supported_files, legacy_cells_to_rows};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -745,6 +814,21 @@ mod discovery_tests {
         let files = discover_supported_files(&[file.to_string_lossy().into_owned()]).unwrap();
         assert_eq!(files.len(), 1);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn builds_rows_from_sparse_legacy_xls_cells() {
+        let rows = legacy_cells_to_rows(vec![
+            (1, 5, "证件号码".into()),
+            (1, 8, "入住时间".into()),
+            (2, 5, "320111195906152045".into()),
+            (2, 8, "202605010000".into()),
+        ])
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][4], "证件号码");
+        assert_eq!(rows[0][7], "入住时间");
+        assert_eq!(rows[1][4], "320111195906152045");
     }
 }
 
