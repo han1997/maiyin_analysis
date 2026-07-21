@@ -19,6 +19,7 @@ const person: PersonSummary = {
   level: "中风险",
   alertCount: 2,
   alertTitles: ["不同住宿地点时间重合", "30 天高频入住"],
+  hotelNames: ["临涧如雅民宿"],
 };
 
 describe("filterPeople", () => {
@@ -55,5 +56,17 @@ describe("filterPeople", () => {
       }).total,
     ).toBe(1);
   });
-});
 
+  it("supports fuzzy hotel-name matching", () => {
+    expect(
+      filterPeople([person], {
+        search: "",
+        hotelSearch: "临雅民宿",
+        level: "全部等级",
+        alertState: "全部人员",
+        page: 1,
+        pageSize: 50,
+      }).total,
+    ).toBe(1);
+  });
+});

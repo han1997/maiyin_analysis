@@ -1,10 +1,10 @@
-use crate::analysis::analyze_records;
+use crate::analysis::{analyze_records, within_analysis_scope, within_analysis_time_window};
 use crate::error::{AppError, CommandError};
 use crate::exporter::{export_to, OperationResult};
 use crate::importer;
 use crate::model::{
-    format_datetime, AnalysisSettings, EvidenceRecord, PersonDetail, StoredSession,
-    WorkspaceSnapshot,
+    format_datetime, AnalysisSettings, EvidenceRecord, ImportedStayRecord, PersonDetail,
+    StoredSession, WorkspaceSnapshot,
 };
 use crate::storage::SessionStore;
 use chrono::Local;
@@ -247,6 +247,8 @@ pub fn get_person_detail(
         .iter()
         .filter(|record| {
             record.person_key == person_key
+                && within_analysis_scope(record, &session.settings)
+                && within_analysis_time_window(record, &session.settings)
                 && (evidence_ids.is_empty() || evidence_ids.contains(&record.uid))
         })
         .map(|record| EvidenceRecord {
@@ -267,6 +269,23 @@ pub fn get_person_detail(
         alerts: analysis.alerts.clone(),
         evidence,
     })
+}
+
+#[tauri::command]
+pub fn get_imported_records(
+    state: State<'_, AppState>,
+) -> Result<Vec<ImportedStayRecord>, CommandError> {
+    let backend = lock(&state)?;
+    let session = backend.current.as_ref().ok_or(AppError::NoWorkspace)?;
+    Ok(session
+        .records
+        .iter()
+        .filter(|record| {
+            within_analysis_scope(record, &session.settings)
+                && within_analysis_time_window(record, &session.settings)
+        })
+        .map(imported_stay_record)
+        .collect())
 }
 
 #[tauri::command]
@@ -355,13 +374,24 @@ fn snapshot(backend: &BackendState) -> WorkspaceSnapshot {
 }
 
 fn validate_settings(settings: &AnalysisSettings) -> Result<(), AppError> {
-    if !(1..=9_999).contains(&settings.month_threshold) {
-        return Err(AppError::Validation("30 天阈值应在 1 到 9999 之间".into()));
+    for (label, value) in [
+        ("时间窗口", settings.frequency_threshold),
+        ("7 天", settings.week_threshold),
+        ("30 天", settings.month_threshold),
+        ("365 天", settings.year_threshold),
+    ] {
+        if !(1..=99_999).contains(&value) {
+            return Err(AppError::Validation(format!(
+                "{label}阈值应在 1 到 99999 之间"
+            )));
+        }
     }
-    if !(1..=99_999).contains(&settings.year_threshold) {
-        return Err(AppError::Validation(
-            "365 天阈值应在 1 到 99999 之间".into(),
-        ));
+    if settings
+        .frequency_start
+        .zip(settings.frequency_end)
+        .is_some_and(|(start, end)| start > end)
+    {
+        return Err(AppError::Validation("入住开始时间不能晚于结束时间".into()));
     }
     if settings
         .min_age
@@ -371,6 +401,26 @@ fn validate_settings(settings: &AnalysisSettings) -> Result<(), AppError> {
         return Err(AppError::Validation("最小年龄不能大于最大年龄".into()));
     }
     Ok(())
+}
+
+fn imported_stay_record(record: &crate::model::Record) -> ImportedStayRecord {
+    ImportedStayRecord {
+        uid: record.uid,
+        source_file: record.source_file.clone(),
+        source_row: record.source_row,
+        name: record.name.clone(),
+        id_no: record.id_no.clone(),
+        phone: record.phone.clone(),
+        household_region: record.household_region.clone(),
+        hotel_name: record.hotel_name.clone(),
+        region: record.region.clone(),
+        address: record.address.clone(),
+        room_no: record.room_no.clone(),
+        check_in: format_datetime(record.check_in),
+        register_time: format_datetime(record.register_time),
+        check_out: format_datetime(record.check_out),
+        issues: record.issues.clone(),
+    }
 }
 
 fn lock<'a>(

@@ -28,7 +28,9 @@ pub fn analyze_records(
 
     let scoped: Vec<&Record> = records
         .iter()
-        .filter(|record| within_analysis_scope(record, settings))
+        .filter(|record| {
+            within_analysis_scope(record, settings) && within_analysis_time_window(record, settings)
+        })
         .collect();
     let stats = AnalysisStats {
         records: analyses.iter().map(|item| item.summary.total_records).sum(),
@@ -53,7 +55,9 @@ fn analyze_person(
     mut records: Vec<&Record>,
     settings: &AnalysisSettings,
 ) -> Option<PersonAnalysis> {
-    records.retain(|record| within_analysis_scope(record, settings));
+    records.retain(|record| {
+        within_analysis_scope(record, settings) && within_analysis_time_window(record, settings)
+    });
     records.sort_by_key(|record| record.check_in.unwrap_or(NaiveDateTime::MIN));
     let first = *records.first()?;
 
@@ -67,47 +71,58 @@ fn analyze_person(
     let mut alerts = Vec::new();
     let mut overlap_days = 0;
     let mut sequential_days = 0;
+    let mut location_cache = HashMap::new();
 
-    for (day, day_records) in by_day {
-        if day_records.len() < 2 {
-            continue;
-        }
-        let mut pair_count: usize = 0;
-        let mut pair_labels = Vec::new();
-        for index in 0..day_records.len() {
-            for second in day_records.iter().skip(index + 1) {
-                let first_record = day_records[index];
-                if intervals_overlap(first_record, second)
-                    && different_accommodation(first_record, second)
-                {
-                    pair_count += 1;
-                    if pair_labels.len() < 4 {
-                        pair_labels.push(format!(
-                            "{} {} 与 {} {}",
-                            fallback(&first_record.hotel_name, "未填旅馆"),
-                            fallback(&first_record.room_no, "未填房间"),
-                            fallback(&second.hotel_name, "未填旅馆"),
-                            fallback(&second.room_no, "未填房间"),
-                        ));
-                    }
-                }
-            }
-        }
-
+    let overlap_pairs_by_day = overlapping_stay_pairs(&records);
+    for (day, day_records) in &by_day {
         let evidence_ids = day_records
             .iter()
             .map(|record| record.uid)
             .collect::<Vec<_>>();
-        if pair_count > 0 {
+        if let Some(pairs) = overlap_pairs_by_day.get(day) {
             overlap_days += 1;
+            let different_place_count = pairs
+                .iter()
+                .filter(|(first, second)| {
+                    different_accommodation_cached(first, second, &mut location_cache)
+                })
+                .count();
+            let pair_labels = pairs
+                .iter()
+                .take(4)
+                .map(|(first_record, second)| {
+                    format!(
+                        "{} {} 与 {} {}",
+                        fallback(&first_record.hotel_name, "未填旅馆"),
+                        fallback(&first_record.room_no, "未填房间"),
+                        fallback(&second.hotel_name, "未填旅馆"),
+                        fallback(&second.room_no, "未填房间"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let evidence_ids = pairs
+                .iter()
+                .flat_map(|(first, second)| [first.uid, second.uid])
+                .fold(Vec::new(), |mut ids, uid| {
+                    if !ids.contains(&uid) {
+                        ids.push(uid);
+                    }
+                    ids
+                });
             alerts.push(AlertSummary {
                 kind: "overlap".into(),
-                severity: "高".into(),
-                score: (45 + (pair_count.saturating_sub(1) as u32) * 5).min(60),
-                title: format!("{} 辖区内入住时间重合", day),
+                severity: if different_place_count > 0 {
+                    "高"
+                } else {
+                    "中"
+                }
+                .into(),
+                score: overlap_score(pairs.len(), different_place_count),
+                title: format!("{} 入住时间重叠", day),
                 detail: format!(
-                    "{} 条记录，重合关系：{}",
-                    day_records.len(),
+                    "{} 对记录存在入住到退房时间交叉；其中 {} 对酒店或房号不同：{}",
+                    pairs.len(),
+                    different_place_count,
                     pair_labels.join("；")
                 ),
                 evidence_count: evidence_ids.len(),
@@ -116,12 +131,12 @@ fn analyze_person(
         } else if day_records.len() > 3 {
             sequential_days += 1;
             alerts.push(AlertSummary {
-                kind: "daily_frequency".into(),
+                kind: "same_day_many".into(),
                 severity: "中".into(),
                 score: (25 + ((day_records.len() - 4) as u32) * 5).min(45),
                 title: format!("{} 辖区内非重合入住超过 3 次", day),
                 detail: format!(
-                    "{} 条有效记录未发现不同酒店或不同房间的时间重合；不足 10 分钟的记录已排除。",
+                    "{} 条有效记录未发现入住时间重叠；不足 10 分钟的记录已排除。",
                     day_records.len()
                 ),
                 evidence_count: evidence_ids.len(),
@@ -130,39 +145,43 @@ fn analyze_person(
         }
     }
 
-    let month_count = max_window_count(&records, 30);
-    let year_count = max_window_count(&records, 365);
-    if month_count > settings.month_threshold {
-        let difference = month_count - settings.month_threshold;
-        alerts.push(AlertSummary {
-            kind: "month_frequency".into(),
-            severity: if difference >= 3 {
-                "高".into()
-            } else {
-                "中".into()
-            },
-            score: (30 + difference as u32 * 2).min(50),
-            title: format!("30 天内入住 {} 次", month_count),
-            detail: format!("超过页面设置阈值 {} 次。", settings.month_threshold),
-            evidence_count: records.len(),
-            evidence_ids: records.iter().map(|record| record.uid).collect(),
-        });
-    }
-    if year_count > settings.year_threshold {
-        let difference = year_count - settings.year_threshold;
-        alerts.push(AlertSummary {
-            kind: "year_frequency".into(),
-            severity: if difference >= 6 {
-                "高".into()
-            } else {
-                "中".into()
-            },
-            score: (35 + difference as u32).min(55),
-            title: format!("365 天内入住 {} 次", year_count),
-            detail: format!("超过页面设置阈值 {} 次。", settings.year_threshold),
-            evidence_count: records.len(),
-            evidence_ids: records.iter().map(|record| record.uid).collect(),
-        });
+    let week_records = max_window_records(&records, 7);
+    let month_records = max_window_records(&records, 30);
+    let year_records = max_window_records(&records, 365);
+    let use_selected_window =
+        settings.frequency_start.is_some() || settings.frequency_end.is_some();
+    if use_selected_window && records.len() > settings.frequency_threshold {
+        alerts.push(frequency_alert(
+            "window_frequency",
+            "时间窗口",
+            &records,
+            settings.frequency_threshold,
+        ));
+    } else if !use_selected_window {
+        for (kind, label, window_records, threshold) in [
+            (
+                "week_frequency",
+                "7 天",
+                &week_records,
+                settings.week_threshold,
+            ),
+            (
+                "month_frequency",
+                "30 天",
+                &month_records,
+                settings.month_threshold,
+            ),
+            (
+                "year_frequency",
+                "365 天",
+                &year_records,
+                settings.year_threshold,
+            ),
+        ] {
+            if window_records.len() > threshold {
+                alerts.push(frequency_alert(kind, label, window_records, threshold));
+            }
+        }
     }
 
     let score = alerts.iter().map(|alert| alert.score).sum::<u32>().min(100);
@@ -176,16 +195,67 @@ fn analyze_person(
         age: first.age,
         gender: first.gender.clone(),
         total_records: records.len(),
-        max_month_count: month_count,
-        max_year_count: year_count,
+        max_week_count: week_records.len(),
+        max_month_count: month_records.len(),
+        max_year_count: year_records.len(),
         overlap_days,
         sequential_days,
         score,
         level,
         alert_count: alerts.len(),
         alert_titles: alerts.iter().map(|alert| alert.title.clone()).collect(),
+        hotel_names: records.iter().fold(Vec::new(), |mut names, record| {
+            if !record.hotel_name.trim().is_empty() && !names.contains(&record.hotel_name) {
+                names.push(record.hotel_name.clone());
+            }
+            names
+        }),
     };
     Some(PersonAnalysis { summary, alerts })
+}
+
+fn frequency_alert(kind: &str, label: &str, records: &[&Record], threshold: usize) -> AlertSummary {
+    let count = records.len();
+    AlertSummary {
+        kind: kind.into(),
+        severity: if count >= threshold + 2 { "高" } else { "中" }.into(),
+        score: (45 + ((count - threshold) as u32) * 6).min(80),
+        title: format!("{}内入住 {} 次", label, count),
+        detail: format!("{}内超过页面设置阈值 {} 次。", label, threshold),
+        evidence_count: count,
+        evidence_ids: records.iter().map(|record| record.uid).collect(),
+    }
+}
+
+fn overlap_score(pair_count: usize, different_place_count: usize) -> u32 {
+    (20 + pair_count as u32 * 2 + different_place_count as u32 * 5).min(35)
+}
+
+fn overlapping_stay_pairs<'a>(
+    records: &[&'a Record],
+) -> BTreeMap<NaiveDate, Vec<(&'a Record, &'a Record)>> {
+    let mut pairs = BTreeMap::new();
+    for (index, first) in records.iter().enumerate() {
+        let Some(first_start) = first.check_in else {
+            continue;
+        };
+        let first_end = effective_end(first);
+        for second in records.iter().skip(index + 1) {
+            let Some(second_start) = second.check_in else {
+                continue;
+            };
+            if second_start >= first_end {
+                break;
+            }
+            if first_start < effective_end(second) && intervals_overlap(first, second) {
+                pairs
+                    .entry(second_start.date())
+                    .or_insert_with(Vec::new)
+                    .push((*first, *second));
+            }
+        }
+    }
+    pairs
 }
 
 pub fn within_analysis_scope(record: &Record, settings: &AnalysisSettings) -> bool {
@@ -267,6 +337,22 @@ pub fn within_analysis_scope(record: &Record, settings: &AnalysisSettings) -> bo
     true
 }
 
+pub fn within_analysis_time_window(record: &Record, settings: &AnalysisSettings) -> bool {
+    let Some(check_in) = record.check_in else {
+        return false;
+    };
+    if settings
+        .frequency_start
+        .is_some_and(|start| check_in < start)
+    {
+        return false;
+    }
+    if settings.frequency_end.is_some_and(|end| check_in > end) {
+        return false;
+    }
+    true
+}
+
 pub fn intervals_overlap(first: &Record, second: &Record) -> bool {
     let (Some(first_start), Some(second_start)) = (first.check_in, second.check_in) else {
         return false;
@@ -276,30 +362,49 @@ pub fn intervals_overlap(first: &Record, second: &Record) -> bool {
     first_start < second_end && second_start < first_end
 }
 
-pub fn different_accommodation(first: &Record, second: &Record) -> bool {
-    let first_hotel = compact(&first.hotel_name);
-    let second_hotel = compact(&second.hotel_name);
-    let first_room = compact(&first.room_no);
-    let second_room = compact(&second.room_no);
-    (!first_hotel.is_empty() && !second_hotel.is_empty() && first_hotel != second_hotel)
-        || (!first_room.is_empty() && !second_room.is_empty() && first_room != second_room)
+fn different_accommodation_cached(
+    first: &Record,
+    second: &Record,
+    cache: &mut HashMap<u64, (String, String)>,
+) -> bool {
+    let first_location = cache
+        .entry(first.uid)
+        .or_insert_with(|| (compact(&first.hotel_name), compact(&first.room_no)))
+        .clone();
+    let second_location = cache
+        .entry(second.uid)
+        .or_insert_with(|| (compact(&second.hotel_name), compact(&second.room_no)));
+    (!first_location.0.is_empty()
+        && !second_location.0.is_empty()
+        && first_location.0 != second_location.0)
+        || (!first_location.1.is_empty()
+            && !second_location.1.is_empty()
+            && first_location.1 != second_location.1)
 }
 
-pub fn max_window_count(records: &[&Record], days: i64) -> usize {
-    let mut timestamps: Vec<NaiveDateTime> = records
+fn max_window_records<'a>(records: &[&'a Record], days: i64) -> Vec<&'a Record> {
+    let ordered = records
         .iter()
-        .filter_map(|record| record.check_in)
-        .collect();
-    timestamps.sort();
-    let mut maximum = 0;
-    let mut left = 0;
-    for right in 0..timestamps.len() {
-        while timestamps[right] - timestamps[left] > Duration::days(days) {
-            left += 1;
+        .copied()
+        .filter(|record| record.check_in.is_some())
+        .collect::<Vec<_>>();
+    let mut best = (0, 0);
+    let mut end = 0;
+    for start in 0..ordered.len() {
+        let window_end =
+            ordered[start].check_in.unwrap_or(NaiveDateTime::MIN) + Duration::days(days);
+        while end < ordered.len()
+            && ordered[end]
+                .check_in
+                .is_some_and(|value| value <= window_end)
+        {
+            end += 1;
         }
-        maximum = maximum.max(right - left + 1);
+        if end - start > best.1 - best.0 {
+            best = (start, end);
+        }
     }
-    maximum
+    ordered[best.0..best.1].to_vec()
 }
 
 fn effective_end(record: &Record) -> NaiveDateTime {
@@ -374,36 +479,63 @@ mod tests {
     }
 
     #[test]
-    fn overlap_requires_different_room_or_hotel() {
+    fn same_room_overlap_alerts_and_different_room_scores_higher() {
         let first = record(1, "301", "2026-05-01 09:30", "2026-05-01 13:00");
         let same = record(2, "301", "2026-05-01 10:00", "2026-05-01 12:00");
+        let same_result = analyze_records(&[first.clone(), same], &AnalysisSettings::default()).0;
+        let same_alert = &same_result[0].alerts[0];
+        assert_eq!(same_alert.kind, "overlap");
+        assert_eq!(same_alert.score, 22);
+        assert_eq!(same_alert.severity, "中");
+
         let other = record(3, "302", "2026-05-01 10:00", "2026-05-01 12:00");
-        assert!(intervals_overlap(&first, &same));
-        assert!(!different_accommodation(&first, &same));
-        assert!(different_accommodation(&first, &other));
+        let other_result = analyze_records(&[first, other], &AnalysisSettings::default()).0;
+        assert_eq!(other_result[0].alerts[0].score, 27);
+        assert_eq!(other_result[0].alerts[0].severity, "高");
     }
 
     #[test]
-    fn scores_overlap_and_window_frequency() {
+    fn selected_window_frequency_disables_rolling_frequency() {
         let mut records = Vec::new();
-        for day in 1..=8 {
+        for day in 1..=4 {
             records.push(record(
                 day,
-                if day == 2 { "302" } else { "301" },
+                "301",
                 &format!("2026-05-{day:02} 09:30"),
                 &format!("2026-05-{day:02} 13:00"),
             ));
         }
-        records[1].check_in = NaiveDate::from_ymd_opt(2026, 5, 1)
-            .unwrap()
-            .and_hms_opt(10, 0, 0);
-        let (analyses, _) = analyze_records(&records, &AnalysisSettings::default());
-        assert_eq!(analyses.len(), 1);
-        assert!(analyses[0].summary.score >= 77);
-        assert!(analyses[0].alerts.iter().any(|item| item.kind == "overlap"));
-        assert!(analyses[0]
-            .alerts
-            .iter()
-            .any(|item| item.kind == "month_frequency"));
+        let settings = AnalysisSettings {
+            frequency_start: NaiveDate::from_ymd_opt(2026, 5, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0),
+            ..Default::default()
+        };
+        let analyses = analyze_records(&records, &settings).0;
+        assert_eq!(analyses[0].alerts.len(), 1);
+        assert_eq!(analyses[0].alerts[0].kind, "window_frequency");
+        assert_eq!(analyses[0].alerts[0].score, 51);
+    }
+
+    #[test]
+    fn analysis_window_excludes_records_from_counts_and_evidence() {
+        let records = vec![
+            record(1, "301", "2026-04-30 09:30", "2026-04-30 13:00"),
+            record(2, "301", "2026-05-01 09:30", "2026-05-01 13:00"),
+            record(3, "302", "2026-05-01 10:00", "2026-05-01 12:00"),
+        ];
+        let settings = AnalysisSettings {
+            frequency_start: NaiveDate::from_ymd_opt(2026, 5, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0),
+            frequency_end: NaiveDate::from_ymd_opt(2026, 5, 1)
+                .unwrap()
+                .and_hms_opt(23, 59, 0),
+            ..Default::default()
+        };
+        let (analyses, stats) = analyze_records(&records, &settings);
+        assert_eq!(analyses[0].summary.total_records, 2);
+        assert_eq!(stats.records, 2);
+        assert_eq!(analyses[0].alerts[0].evidence_ids, vec![2, 3]);
     }
 }

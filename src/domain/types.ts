@@ -14,6 +14,10 @@ export interface AnalysisSettings {
   minAge: number | null;
   maxAge: number | null;
   gender: "" | "男" | "女";
+  frequencyStart: string | null;
+  frequencyEnd: string | null;
+  frequencyThreshold: number;
+  weekThreshold: number;
   monthThreshold: number;
   yearThreshold: number;
 }
@@ -27,7 +31,7 @@ export interface AnalysisStats {
 }
 
 export interface AlertSummary {
-  kind: "overlap" | "daily_frequency" | "month_frequency" | "year_frequency";
+  kind: "overlap" | "same_day_many" | "window_frequency" | "week_frequency" | "month_frequency" | "year_frequency";
   severity: Severity;
   score: number;
   title: string;
@@ -44,6 +48,7 @@ export interface PersonSummary {
   age: number | null;
   gender: string;
   totalRecords: number;
+  maxWeekCount?: number;
   maxMonthCount: number;
   maxYearCount: number;
   overlapDays: number;
@@ -52,6 +57,7 @@ export interface PersonSummary {
   level: RiskLevel;
   alertCount: number;
   alertTitles: string[];
+  hotelNames?: string[];
 }
 
 export interface EvidenceRecord {
@@ -63,6 +69,24 @@ export interface EvidenceRecord {
   address: string;
   roomNo: string;
   checkIn: string;
+  checkOut: string;
+  issues: string[];
+}
+
+export interface ImportedStayRecord {
+  uid: number;
+  sourceFile: string;
+  sourceRow: number;
+  name: string;
+  idNo: string;
+  phone: string;
+  householdRegion: string;
+  hotelName: string;
+  region: string;
+  address: string;
+  roomNo: string;
+  checkIn: string;
+  registerTime: string;
   checkOut: string;
   issues: string[];
 }
@@ -107,6 +131,7 @@ export interface WorkspaceSnapshot {
 
 export interface PersonQuery {
   search: string;
+  hotelSearch?: string;
   level: "全部等级" | RiskLevel;
   alertState: "全部人员" | "仅预警人员" | "未预警人员";
   page: number;
@@ -140,7 +165,10 @@ export const DEFAULT_SETTINGS: AnalysisSettings = {
   minAge: null,
   maxAge: null,
   gender: "",
-  monthThreshold: 6,
-  yearThreshold: 24,
+  frequencyStart: null,
+  frequencyEnd: null,
+  frequencyThreshold: 3,
+  weekThreshold: 3,
+  monthThreshold: 12,
+  yearThreshold: 144,
 };
-

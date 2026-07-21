@@ -30,6 +30,7 @@ pub fn run() {
             commands::clear_workspace,
             commands::reanalyze,
             commands::get_person_detail,
+            commands::get_imported_records,
             commands::export_result,
             commands::set_storage_directory,
         ])

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { AnalysisSettings, ExportKind, OperationResult, PersonDetail } from "../domain/types";
+import type { AnalysisSettings, ExportKind, ImportedStayRecord, OperationResult, PersonDetail } from "../domain/types";
 import type { AppApi } from "./contract";
 
 async function selectPaths(directory: boolean): Promise<string[]> {
@@ -35,6 +35,7 @@ export const tauriApi: AppApi = {
   clearWorkspace: () => invoke("clear_workspace"),
   reanalyze: (settings: AnalysisSettings) => invoke("reanalyze", { settings }),
   getPersonDetail: (personKey): Promise<PersonDetail> => invoke("get_person_detail", { personKey }),
+  getImportedRecords: (): Promise<ImportedStayRecord[]> => invoke("get_imported_records"),
   async exportResult(kind: ExportKind): Promise<OperationResult> {
     const definitions: Record<ExportKind, { defaultPath: string; name: string; extensions: string[] }> = {
       summary_csv: { defaultPath: "人员汇总.csv", name: "CSV 文件", extensions: ["csv"] },

@@ -117,6 +117,11 @@ export const browserApi: AppApi = {
     return structuredClone(getDemoDetail(personKey));
   },
 
+  async getImportedRecords() {
+    await pause(180);
+    return [];
+  },
+
   async exportResult(kind: ExportKind) {
     await pause(480);
     const labels: Record<ExportKind, string> = {
@@ -133,4 +138,3 @@ export const browserApi: AppApi = {
     return { message: "存放目录只能在 Tauri 桌面模式中修改。" };
   },
 };
-

@@ -6,6 +6,7 @@ import { StatStrip } from "./components/StatStrip";
 import type {
   AnalysisSettings,
   ExportKind,
+  ImportedStayRecord,
   PersonDetail,
   PersonQuery,
   RiskLevel,
@@ -28,17 +29,23 @@ const exportActions: Array<{ kind: ExportKind; label: string }> = [
   { kind: "raw_csv", label: "规范化原始 CSV" },
 ];
 
+const initialQuery: PersonQuery = {
+  search: "",
+  hotelSearch: "",
+  level: "全部等级",
+  alertState: "全部人员",
+  page: 1,
+  pageSize: 50,
+};
+
 function App() {
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot | null>(null);
   const [busy, setBusy] = useState<BusyAction>("boot");
   const [toast, setToast] = useState<ToastState | null>(null);
-  const [query, setQuery] = useState<PersonQuery>({
-    search: "",
-    level: "全部等级",
-    alertState: "全部人员",
-    page: 1,
-    pageSize: 50,
-  });
+  const [query, setQuery] = useState<PersonQuery>(initialQuery);
+  const [filterDraft, setFilterDraft] = useState<PersonQuery>(initialQuery);
+  const [activeView, setActiveView] = useState<"people" | "records">("people");
+  const [importedRecords, setImportedRecords] = useState<ImportedStayRecord[]>([]);
   const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<PersonDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -55,6 +62,7 @@ function App() {
       .then((data) => {
         if (!active) return;
         setSnapshot(data);
+        setDraftSettings(structuredClone(data.settings));
         setSelectedSessions(new Set(data.sourceSessionIds));
       })
       .catch((error: unknown) => {
@@ -91,8 +99,10 @@ function App() {
       const next = await operation();
       if (next) {
         setSnapshot(next);
+        setDraftSettings(structuredClone(next.settings));
         setQuery((current) => ({ ...current, page: 1 }));
         setDetail(null);
+        setImportedRecords([]);
         setSelectedSessions(new Set(next.sourceSessionIds));
         return true;
       }
@@ -117,6 +127,19 @@ function App() {
     }
   }
 
+  async function openImportedRecords() {
+    setActiveView("records");
+    if (importedRecords.length > 0) return;
+    try {
+      setBusy("session");
+      setImportedRecords(await appApi.getImportedRecords());
+    } catch (error) {
+      setToast({ tone: "error", message: errorMessage(error) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function openSettings() {
     if (!snapshot) return;
     setDraftSettings(structuredClone(snapshot.settings));
@@ -125,8 +148,12 @@ function App() {
 
   async function applySettings() {
     if (!draftSettings) return;
-    if (draftSettings.monthThreshold < 1 || draftSettings.yearThreshold < 1) {
+    if ([draftSettings.frequencyThreshold, draftSettings.weekThreshold, draftSettings.monthThreshold, draftSettings.yearThreshold].some((value) => value < 1)) {
       setToast({ tone: "error", message: "频次阈值必须是大于 0 的整数。" });
+      return;
+    }
+    if (draftSettings.frequencyStart && draftSettings.frequencyEnd && draftSettings.frequencyStart > draftSettings.frequencyEnd) {
+      setToast({ tone: "error", message: "入住开始时间不能晚于结束时间。" });
       return;
     }
     setSettingsOpen(false);
@@ -296,10 +323,17 @@ function App() {
           </div>
           <dl className="scope-summary">
             <div><dt>入住辖区</dt><dd>{joinScope([snapshot.settings.province, snapshot.settings.city, snapshot.settings.county])}</dd></div>
-            <div><dt>30 天频次</dt><dd>超过 {snapshot.settings.monthThreshold} 次</dd></div>
-            <div><dt>365 天频次</dt><dd>超过 {snapshot.settings.yearThreshold} 次</dd></div>
             <div><dt>户籍条件</dt><dd>{snapshot.settings.excludeHouseholdCounty ? `排除 ${snapshot.settings.excludeHouseholdCounty}` : "不限"}</dd></div>
           </dl>
+          {draftSettings && <div className="sidebar-parameters">
+            <span className="sidebar-parameter-title">选定入住时间</span>
+            <DateTimeField label="开始" value={draftSettings.frequencyStart} onChange={(value) => setDraftSettings({ ...draftSettings, frequencyStart: value })}/>
+            <DateTimeField label="结束" value={draftSettings.frequencyEnd} onChange={(value) => setDraftSettings({ ...draftSettings, frequencyEnd: value })}/>
+            <NumberField label="范围阈值" value={draftSettings.frequencyThreshold} onChange={(value) => setDraftSettings({ ...draftSettings, frequencyThreshold: value ?? 1 })} required/>
+            <span className="sidebar-parameter-title">高频入住阈值</span>
+            <div className="sidebar-thresholds"><NumberField label="7天" value={draftSettings.weekThreshold} onChange={(value) => setDraftSettings({ ...draftSettings, weekThreshold: value ?? 1 })} required/><NumberField label="30天" value={draftSettings.monthThreshold} onChange={(value) => setDraftSettings({ ...draftSettings, monthThreshold: value ?? 1 })} required/><NumberField label="365天" value={draftSettings.yearThreshold} onChange={(value) => setDraftSettings({ ...draftSettings, yearThreshold: value ?? 1 })} required/></div>
+            <button className="button button-primary full-width" type="button" disabled={busy === "reanalyze" || snapshot.mode === "empty"} onClick={applySettings}>应用参数</button>
+          </div>}
           <button className="button button-secondary full-width" type="button" onClick={openSettings}>
             <Icon name="settings" /> 查看全部参数
           </button>
@@ -334,27 +368,39 @@ function App() {
 
         <StatStrip stats={snapshot.stats} />
 
+        {snapshot.mode !== "empty" && (
+          <nav className="workspace-tabs" aria-label="数据视图">
+            <button className={activeView === "people" ? "is-active" : ""} type="button" onClick={() => setActiveView("people")}>人员研判</button>
+            <button className={activeView === "records" ? "is-active" : ""} type="button" onClick={openImportedRecords}>导入记录 <span>{importedRecords.length || ""}</span></button>
+          </nav>
+        )}
+
         {snapshot.mode === "empty" ? (
           <EmptyWorkspace onFiles={() => runSnapshotAction("import", () => appApi.importFiles())} onFolder={() => runSnapshotAction("import", () => appApi.importFolder())} />
         ) : (
-          <section className="results-region" aria-label="人员分析结果">
+          activeView === "records" ? (
+            <ImportedRecordsTable records={importedRecords} showSensitive={showSensitive} />
+          ) : <section className="results-region" aria-label="人员分析结果">
             <div className="result-toolbar">
               <div className="search-field">
                 <Icon name="search" size={17} />
                 <input
                   aria-label="搜索人员"
                   placeholder="搜索姓名、证件号、手机号、户籍地或预警"
-                  value={query.search}
-                  onChange={(event) => setQuery((current) => ({ ...current, search: event.target.value, page: 1 }))}
+                  value={filterDraft.search}
+                  onChange={(event) => setFilterDraft((current) => ({ ...current, search: event.target.value }))}
                 />
-                {query.search && <button type="button" aria-label="清除搜索" onClick={() => setQuery((current) => ({ ...current, search: "", page: 1 }))}><Icon name="close" size={15} /></button>}
+                {filterDraft.search && <button type="button" aria-label="清除搜索" onClick={() => setFilterDraft((current) => ({ ...current, search: "" }))}><Icon name="close" size={15} /></button>}
               </div>
-              <select aria-label="风险等级" value={query.level} onChange={(event) => setQuery((current) => ({ ...current, level: event.target.value as PersonQuery["level"], page: 1 }))}>
+              <input className="toolbar-input" aria-label="旅馆名称" placeholder="旅馆名称（支持模糊搜索）" value={filterDraft.hotelSearch} onChange={(event) => setFilterDraft((current) => ({ ...current, hotelSearch: event.target.value }))} />
+              <select aria-label="风险等级" value={filterDraft.level} onChange={(event) => setFilterDraft((current) => ({ ...current, level: event.target.value as PersonQuery["level"] }))}>
                 {riskLevels.map((level) => <option key={level}>{level}</option>)}
               </select>
-              <select aria-label="预警状态" value={query.alertState} onChange={(event) => setQuery((current) => ({ ...current, alertState: event.target.value as PersonQuery["alertState"], page: 1 }))}>
+              <select aria-label="预警状态" value={filterDraft.alertState} onChange={(event) => setFilterDraft((current) => ({ ...current, alertState: event.target.value as PersonQuery["alertState"] }))}>
                 <option>全部人员</option><option>仅预警人员</option><option>未预警人员</option>
               </select>
+              <button className="button button-primary compact" type="button" onClick={() => setQuery({ ...filterDraft, page: 1 })}>应用筛选</button>
+              <button className="button button-quiet compact" type="button" onClick={() => { setFilterDraft(initialQuery); setQuery(initialQuery); }}>重置</button>
               <div className="toolbar-spacer" />
               <div className="export-group" aria-label="导出当前结果">
                 {exportActions.map((action) => (
@@ -370,7 +416,7 @@ function App() {
                 <thead>
                   <tr>
                     <th scope="col">人员</th><th scope="col">户籍地</th><th scope="col" className="numeric">记录</th>
-                    <th scope="col" className="numeric">30 天</th><th scope="col" className="numeric">365 天</th>
+                    <th scope="col" className="numeric">7 天</th><th scope="col" className="numeric">30 天</th><th scope="col" className="numeric">365 天</th>
                     <th scope="col">预警依据</th><th scope="col" className="numeric">风险分</th><th scope="col">等级</th><th scope="col"><span className="sr-only">查看</span></th>
                   </tr>
                 </thead>
@@ -385,6 +431,7 @@ function App() {
                       </td>
                       <td><span className="primary-cell-text">{person.householdRegion}</span><small>{person.gender || "未知"} · {person.age ?? "未知"} 岁</small></td>
                       <td className="numeric strong-number">{person.totalRecords}</td>
+                      <td className="numeric">{person.maxWeekCount ?? 0}</td>
                       <td className="numeric">{person.maxMonthCount}</td>
                       <td className="numeric">{person.maxYearCount}</td>
                       <td><div className="alert-summary">{person.alertTitles.length ? person.alertTitles.slice(0, 2).map((title) => <span key={title}>{title}</span>) : <span className="no-alert">未命中预警</span>}</div></td>
@@ -434,6 +481,31 @@ function App() {
   );
 }
 
+function ImportedRecordsTable({ records, showSensitive }: { records: ImportedStayRecord[]; showSensitive: boolean }) {
+  return (
+    <section className="results-region records-region" aria-label="导入入住记录">
+      <div className="records-heading"><div><strong>当前分析范围内的入住记录</strong><span>共 {formatInteger(records.length)} 条，时间边界和人员筛选与研判结果一致</span></div></div>
+      <div className="table-frame">
+        <table>
+          <thead><tr><th>人员</th><th>旅馆 / 房号</th><th>入住时间</th><th>退房时间</th><th>户籍地</th><th>来源</th><th>数据状态</th></tr></thead>
+          <tbody>{records.map((record) => (
+            <tr key={record.uid}>
+              <td title={`${record.name} ${record.idNo} ${record.phone}`}><strong>{record.name || "未填"}</strong><small>{showSensitive ? record.idNo : maskIdentity(record.idNo)} · {showSensitive ? record.phone : maskPhone(record.phone)}</small></td>
+              <td title={`${record.hotelName} ${record.address}`}><span className="primary-cell-text">{record.hotelName || "未填旅馆"}</span><small>房号 {record.roomNo || "未填"}</small></td>
+              <td className="numeric" title={record.checkIn}>{record.checkIn || "未识别"}</td>
+              <td className="numeric" title={record.checkOut}>{record.checkOut || "未退房"}</td>
+              <td title={record.householdRegion}>{record.householdRegion || "未识别"}</td>
+              <td title={record.sourceFile}>{record.sourceFile}<small>第 {record.sourceRow} 行</small></td>
+              <td>{record.issues.length ? <span className="issue-tag" title={record.issues.join("；")}>{record.issues.length} 项问题</span> : <span className="record-ok">正常</span>}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+        {records.length === 0 && <div className="no-results"><strong>当前分析范围内没有入住记录</strong></div>}
+      </div>
+    </section>
+  );
+}
+
 function DetailInspector({ detail, loading, showSensitive, onClose }: { detail: PersonDetail | null; loading: boolean; showSensitive: boolean; onClose: () => void }) {
   return (
     <aside className="detail-inspector" aria-label="人员详情">
@@ -451,7 +523,7 @@ function DetailInspector({ detail, loading, showSensitive, onClose }: { detail: 
               <h3>人员信息</h3>
               <dl className="person-facts">
                 <div><dt>户籍地</dt><dd>{detail.person.householdRegion}</dd></div><div><dt>年龄 / 性别</dt><dd>{detail.person.age ?? "未知"} 岁 · {detail.person.gender || "未知"}</dd></div>
-                <div><dt>30 天最大</dt><dd>{detail.person.maxMonthCount} 次</dd></div><div><dt>365 天最大</dt><dd>{detail.person.maxYearCount} 次</dd></div>
+                <div><dt>7 天最大</dt><dd>{detail.person.maxWeekCount ?? 0} 次</dd></div><div><dt>30 天最大</dt><dd>{detail.person.maxMonthCount} 次</dd></div><div><dt>365 天最大</dt><dd>{detail.person.maxYearCount} 次</dd></div>
               </dl>
             </section>
             <section className="detail-section">
@@ -496,7 +568,9 @@ function SettingsPanel({ settings, onChange, onClose, onApply, busy }: { setting
           <fieldset><legend>入住旅馆辖区</legend><div className="field-grid three"><Field label="省" value={settings.province} onChange={(value) => update("province", value)} placeholder="全部省份"/><Field label="市" value={settings.city} onChange={(value) => update("city", value)} placeholder="全部城市"/><Field label="县区" value={settings.county} onChange={(value) => update("county", value)} placeholder="全部县区"/></div></fieldset>
           <fieldset><legend>入住人户籍地</legend><div className="field-grid three"><Field label="省" value={settings.householdProvince} onChange={(value) => update("householdProvince", value)}/><Field label="市" value={settings.householdCity} onChange={(value) => update("householdCity", value)}/><Field label="县区" value={settings.householdCounty} onChange={(value) => update("householdCounty", value)}/></div></fieldset>
           <fieldset><legend>排除户籍地</legend><p className="fieldset-help">用于仅查看外来人员，例如排除本县户籍。</p><div className="field-grid three"><Field label="省" value={settings.excludeHouseholdProvince} onChange={(value) => update("excludeHouseholdProvince", value)}/><Field label="市" value={settings.excludeHouseholdCity} onChange={(value) => update("excludeHouseholdCity", value)}/><Field label="县区" value={settings.excludeHouseholdCounty} onChange={(value) => update("excludeHouseholdCounty", value)}/></div></fieldset>
-          <fieldset><legend>人员与频次</legend><div className="field-grid four"><NumberField label="最小年龄" value={settings.minAge} onChange={(value) => update("minAge", value)}/><NumberField label="最大年龄" value={settings.maxAge} onChange={(value) => update("maxAge", value)}/><label className="field"><span>性别</span><select value={settings.gender} onChange={(event) => update("gender", event.target.value as AnalysisSettings["gender"])}><option value="">不限</option><option>男</option><option>女</option></select></label><span /></div><div className="field-grid two threshold-grid"><NumberField label="30 天预警阈值" value={settings.monthThreshold} onChange={(value) => update("monthThreshold", value ?? 1)} required/><NumberField label="365 天预警阈值" value={settings.yearThreshold} onChange={(value) => update("yearThreshold", value ?? 1)} required/></div></fieldset>
+          <fieldset><legend>人员条件</legend><div className="field-grid four"><NumberField label="最小年龄" value={settings.minAge} onChange={(value) => update("minAge", value)}/><NumberField label="最大年龄" value={settings.maxAge} onChange={(value) => update("maxAge", value)}/><label className="field"><span>性别</span><select value={settings.gender} onChange={(event) => update("gender", event.target.value as AnalysisSettings["gender"])}><option value="">不限</option><option>男</option><option>女</option></select></label><span /></div></fieldset>
+          <fieldset><legend>选定入住时间范围</legend><p className="fieldset-help">设置任一边界后，仅按范围内记录分析，并停用滚动 7/30/365 天频次计分。</p><div className="field-grid three"><DateTimeField label="开始时间" value={settings.frequencyStart} onChange={(value) => update("frequencyStart", value)}/><DateTimeField label="结束时间" value={settings.frequencyEnd} onChange={(value) => update("frequencyEnd", value)}/><NumberField label="范围内入住阈值" value={settings.frequencyThreshold} onChange={(value) => update("frequencyThreshold", value ?? 1)} required/></div></fieldset>
+          <fieldset><legend>高频入住阈值</legend><p className="fieldset-help">未设置入住时间边界时，滚动频次规则生效。</p><div className="field-grid three"><NumberField label="7 天" value={settings.weekThreshold} onChange={(value) => update("weekThreshold", value ?? 1)} required/><NumberField label="30 天" value={settings.monthThreshold} onChange={(value) => update("monthThreshold", value ?? 1)} required/><NumberField label="365 天" value={settings.yearThreshold} onChange={(value) => update("yearThreshold", value ?? 1)} required/></div></fieldset>
         </div>
         <footer><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" type="button" disabled={busy} onClick={onApply}>{busy ? "正在计算" : "应用参数并重新分析"}</button></footer>
       </section>
@@ -510,6 +584,10 @@ function Field({ label, value, onChange, placeholder = "不限" }: { label: stri
 
 function NumberField({ label, value, onChange, required = false }: { label: string; value: number | null; onChange: (value: number | null) => void; required?: boolean }) {
   return <label className="field"><span>{label}</span><input type="number" min="0" required={required} value={value ?? ""} placeholder="不限" onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))} /></label>;
+}
+
+function DateTimeField({ label, value, onChange }: { label: string; value: string | null; onChange: (value: string | null) => void }) {
+  return <label className="field"><span>{label}</span><input type="datetime-local" value={value?.slice(0, 16) ?? ""} onChange={(event) => onChange(event.target.value ? `${event.target.value}:00` : null)} /></label>;
 }
 
 function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm }: { title: string; description: string; confirmLabel: string; onCancel: () => void; onConfirm: () => void }) {

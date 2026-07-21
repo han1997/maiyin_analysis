@@ -2,6 +2,7 @@ import type {
   AnalysisSettings,
   ExportKind,
   OperationResult,
+  ImportedStayRecord,
   PersonDetail,
   WorkspaceSnapshot,
 } from "../domain/types";
@@ -17,7 +18,7 @@ export interface AppApi {
   clearWorkspace(): Promise<WorkspaceSnapshot>;
   reanalyze(settings: AnalysisSettings): Promise<WorkspaceSnapshot>;
   getPersonDetail(personKey: string): Promise<PersonDetail>;
+  getImportedRecords(): Promise<ImportedStayRecord[]>;
   exportResult(kind: ExportKind): Promise<OperationResult>;
   chooseStorageDirectory(): Promise<OperationResult | null>;
 }
-

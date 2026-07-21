@@ -1,4 +1,4 @@
-use crate::analysis::within_analysis_scope;
+use crate::analysis::{within_analysis_scope, within_analysis_time_window};
 use crate::error::AppError;
 use crate::model::StoredSession;
 use rust_xlsxwriter::{Format, FormatAlign, Workbook};
@@ -53,6 +53,7 @@ fn export_summary_csv(path: &Path, session: &StoredSession) -> Result<(), AppErr
             "年龄",
             "性别",
             "记录总数",
+            "7天最大次数",
             "30天最大次数",
             "365天最大次数",
             "重合天数",
@@ -73,6 +74,7 @@ fn export_summary_csv(path: &Path, session: &StoredSession) -> Result<(), AppErr
                 person.age.map(|age| age.to_string()).unwrap_or_default(),
                 safe(&person.gender),
                 person.total_records.to_string(),
+                person.max_week_count.to_string(),
                 person.max_month_count.to_string(),
                 person.max_year_count.to_string(),
                 person.overlap_days.to_string(),
@@ -110,11 +112,10 @@ fn export_raw_csv(path: &Path, session: &StoredSession) -> Result<(), AppError> 
             "数据问题",
         ])
         .map_err(|error| AppError::Export(error.to_string()))?;
-    for record in session
-        .records
-        .iter()
-        .filter(|record| within_analysis_scope(record, &session.settings))
-    {
+    for record in session.records.iter().filter(|record| {
+        within_analysis_scope(record, &session.settings)
+            && within_analysis_time_window(record, &session.settings)
+    }) {
         writer
             .write_record([
                 safe(&record.source_file),

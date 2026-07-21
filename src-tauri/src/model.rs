@@ -16,6 +16,10 @@ pub struct AnalysisSettings {
     pub min_age: Option<u8>,
     pub max_age: Option<u8>,
     pub gender: String,
+    pub frequency_start: Option<NaiveDateTime>,
+    pub frequency_end: Option<NaiveDateTime>,
+    pub frequency_threshold: usize,
+    pub week_threshold: usize,
     pub month_threshold: usize,
     pub year_threshold: usize,
 }
@@ -35,8 +39,12 @@ impl Default for AnalysisSettings {
             min_age: None,
             max_age: None,
             gender: String::new(),
-            month_threshold: 6,
-            year_threshold: 24,
+            frequency_start: None,
+            frequency_end: None,
+            frequency_threshold: 3,
+            week_threshold: 3,
+            month_threshold: 12,
+            year_threshold: 144,
         }
     }
 }
@@ -98,6 +106,8 @@ pub struct PersonSummary {
     pub age: Option<u8>,
     pub gender: String,
     pub total_records: usize,
+    #[serde(default)]
+    pub max_week_count: usize,
     pub max_month_count: usize,
     pub max_year_count: usize,
     pub overlap_days: usize,
@@ -106,6 +116,8 @@ pub struct PersonSummary {
     pub level: String,
     pub alert_count: usize,
     pub alert_titles: Vec<String>,
+    #[serde(default)]
+    pub hotel_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +138,26 @@ pub struct EvidenceRecord {
     pub address: String,
     pub room_no: String,
     pub check_in: String,
+    pub check_out: String,
+    pub issues: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedStayRecord {
+    pub uid: u64,
+    pub source_file: String,
+    pub source_row: usize,
+    pub name: String,
+    pub id_no: String,
+    pub phone: String,
+    pub household_region: String,
+    pub hotel_name: String,
+    pub region: String,
+    pub address: String,
+    pub room_no: String,
+    pub check_in: String,
+    pub register_time: String,
     pub check_out: String,
     pub issues: Vec<String>,
 }

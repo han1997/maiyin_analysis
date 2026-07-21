@@ -163,3 +163,74 @@ for entry in WalkDir::new(path).follow_links(false) {
     }
 }
 ```
+
+## Scenario: upstream scoring parity
+
+### 1. Scope / Trigger
+
+Applies whenever analysis settings, alert formulas, result summary fields,
+detail evidence, imported-record views, history JSON, or exports change.
+
+### 2. Signatures
+
+```rust
+reanalyze(settings: AnalysisSettings) -> Result<WorkspaceSnapshot, CommandError>
+get_imported_records() -> Result<Vec<ImportedStayRecord>, CommandError>
+within_analysis_time_window(record: &Record, settings: &AnalysisSettings) -> bool
+```
+
+### 3. Contracts
+
+- `AnalysisSettings` includes nullable `frequencyStart`/`frequencyEnd` plus
+  thresholds for selected-window, 7-day, 30-day, and 365-day frequency.
+- Defaults are `3`, `3`, `12`, and `144` respectively.
+- `get_imported_records` is loaded only when the records tab opens and returns
+  only records inside the current scope and check-in boundary; snapshots do
+  not transfer every raw row through IPC.
+- `PersonSummary` includes `maxWeekCount`, `maxMonthCount`, `maxYearCount`, and
+  `hotelNames`; newly added persisted summary fields use serde defaults.
+- React never computes scores. It submits settings once and renders Rust DTOs.
+- Selected-window frequency and rolling frequency are mutually exclusive.
+- Scores are: overlap `min(35, 20 + P*2 + D*5)`, same-day-many
+  `min(45, 25 + (N-4)*5)`, frequency `min(80, 45 + (C-T)*6)`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Any threshold outside `1..=99999` | `validation_error` naming the period |
+| Start boundary after end boundary | `validation_error` and keep settings UI open |
+| Missing check-in | Exclude from time-window analysis |
+| Old history lacks new settings/summary fields | Load serde defaults and reanalyze normally |
+
+### 5. Good / Base / Bad Cases
+
+- Good: one selected boundary is set, all totals/evidence/exports use that
+  boundary, and no rolling frequency alert scores.
+- Base: no boundary is set, rolling 7/30/365-day alerts may independently score.
+- Bad: React filters imported records by time while Rust detail/export retains
+  out-of-window records.
+
+### 6. Tests Required
+
+- Same-room overlap alerts at the base score; different room scores higher.
+- Selected-window count greater than threshold produces only
+  `window_frequency`.
+- Narrow boundaries remove outside records from totals and evidence ids.
+- Fuzzy hotel-name filtering matches ordered non-contiguous characters.
+- Frontend build asserts all new camelCase DTO fields.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+const score = selectedRows.length > threshold ? 45 : 0;
+```
+
+#### Correct
+
+```ts
+const snapshot = await appApi.reanalyze(draftSettings);
+setSnapshot(snapshot);
+```
