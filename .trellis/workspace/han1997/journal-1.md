@@ -72,3 +72,36 @@ Replaced silent expand_folders with discover_supported_files (recursive, case-in
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Fix legacy XLS import compatibility
+
+**Date**: 2026-07-21
+**Task**: Fix legacy XLS import compatibility
+**Branch**: `main`
+
+### Summary
+
+Added BIFF8 fallback parsing for legacy XLS files with malformed shared-string/range metadata; verified against the untouched export sample and documented the backend import contract.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e733117` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

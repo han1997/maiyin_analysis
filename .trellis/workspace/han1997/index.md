@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 2
+- **Total Sessions**: 3
 - **Last Active**: 2026-07-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~74 | Active |
+| `journal-1.md` | ~107 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 3 | 2026-07-21 | Fix legacy XLS import compatibility | `e733117` | `main` |
 | 2 | 2026-07-21 | fix folder recursive import + archive task | `81e689e` | `main` |
 | 1 | 2026-07-16 | Tauri Rust refactor and UI redesign | `0796023`, `87c7a80` | `main` |
 <!-- @@@/auto:session-history -->
