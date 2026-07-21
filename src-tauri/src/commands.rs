@@ -94,12 +94,18 @@ pub async fn import_folders(
     paths: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, CommandError> {
-    let files = tauri::async_runtime::spawn_blocking(move || importer::expand_folders(&paths))
-        .await
-        .map_err(|error| CommandError {
-            code: "task_error",
-            message: error.to_string(),
-        })?;
+    let files =
+        tauri::async_runtime::spawn_blocking(move || importer::discover_supported_files(&paths))
+            .await
+            .map_err(|error| CommandError {
+                code: "task_error",
+                message: error.to_string(),
+            })??;
+    if files.is_empty() {
+        return Err(
+            AppError::Empty("所选文件夹及其子目录中没有 .xls、.xlsx 或 .csv 文件".into()).into(),
+        );
+    }
     import_paths(files, state).await
 }
 

@@ -43,17 +43,44 @@ pub struct ImportedData {
     pub title: String,
 }
 
-pub fn expand_folders(paths: &[String]) -> Vec<String> {
+pub fn discover_supported_files(paths: &[String]) -> Result<Vec<String>, AppError> {
     let mut files = Vec::new();
+    let mut failures = Vec::new();
     for path in paths {
-        for entry in WalkDir::new(path).into_iter().filter_map(Result::ok) {
-            if entry.file_type().is_file() && is_supported(entry.path()) {
-                files.push(entry.path().to_string_lossy().into_owned());
+        let root = PathBuf::from(path);
+        if root.is_file() {
+            if is_supported(&root) {
+                files.push(normalize_path(&root));
+            }
+            continue;
+        }
+        if !root.is_dir() {
+            failures.push(format!("路径不存在或不可访问：{}", path));
+            continue;
+        }
+        for entry in WalkDir::new(&root).follow_links(false).into_iter() {
+            match entry {
+                Ok(entry) if entry.file_type().is_file() && is_supported(entry.path()) => {
+                    files.push(normalize_path(entry.path()));
+                }
+                Ok(_) => {}
+                Err(error) => failures.push(format!("遍历 {} 失败：{}", root.display(), error)),
             }
         }
     }
+    if !failures.is_empty() {
+        return Err(AppError::Read(failures.join("；")));
+    }
     files.sort_by_key(|value| value.to_lowercase());
-    files
+    files.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    Ok(files)
+}
+
+fn normalize_path(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub fn import_paths(paths: &[String]) -> Result<ImportedData, AppError> {
@@ -666,6 +693,59 @@ fn file_name(path: &Path) -> String {
         .and_then(|value| value.to_str())
         .unwrap_or("未命名文件")
         .to_string()
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::discover_supported_files;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "maiyin-folder-discovery-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn recursively_discovers_supported_extensions_case_insensitively() {
+        let root = temp_root();
+        fs::create_dir_all(root.join("nested/deeper")).unwrap();
+        fs::write(root.join("root.CSV"), b"").unwrap();
+        fs::write(root.join("nested/data.XlSx"), b"").unwrap();
+        fs::write(root.join("nested/deeper/legacy.XLS"), b"").unwrap();
+        fs::write(root.join("nested/ignore.pdf"), b"").unwrap();
+
+        let files = discover_supported_files(&[root.to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(files.len(), 3);
+        assert!(files
+            .iter()
+            .any(|path| path.to_lowercase().ends_with("root.csv")));
+        assert!(files
+            .iter()
+            .any(|path| path.to_lowercase().ends_with("data.xlsx")));
+        assert!(files
+            .iter()
+            .any(|path| path.to_lowercase().ends_with("legacy.xls")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn accepts_a_supported_file_path_without_directory_walk() {
+        let root = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("single.CSV");
+        fs::write(&file, b"").unwrap();
+
+        let files = discover_supported_files(&[file.to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(files.len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[derive(Default)]

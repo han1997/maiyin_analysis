@@ -101,3 +101,65 @@ Rust owns normalization, grouping, scoring, persistence, and the returned explan
 - A browser fixture adapter is retained for fast visual development but cannot perform native operations or claim file parsing.
 - Calamine is the first Rust workbook reader. Legacy `.xls` Chinese-text compatibility is an explicit fixture gate because the original application used `xlrd` for known problematic exports.
 
+## Scenario: recursive file discovery
+
+### 1. Scope / Trigger
+
+Applies whenever a command accepts user-selected files or directories before workbook parsing.
+
+### 2. Signatures
+
+```rust
+discover_supported_files(paths: &[String]) -> Result<Vec<String>, AppError>
+import_folders(paths: Vec<String>) -> Result<WorkspaceSnapshot, CommandError>
+```
+
+### 3. Contracts
+
+- Each input may be a supported file or a directory.
+- Directories are recursively scanned without following directory links.
+- `.xls`, `.xlsx`, and `.csv` matching is case-insensitive.
+- Results are canonicalized where possible, sorted deterministically, and de-duplicated case-insensitively.
+- Unsupported files are ignored. Missing paths and traversal errors are not ignored.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Supported file path | Return that normalized file |
+| Directory with nested supported files | Return all supported descendants |
+| Directory with only unsupported files | `empty_import` with supported-extension guidance |
+| Missing or inaccessible root | `read_error` with the affected path |
+| WalkDir entry error | `read_error`; never silently discard it |
+
+### 5. Good / Base / Bad cases
+
+- Good: one root contains `a.CSV` and `nested/b.XLSX`; both reach the shared parser.
+- Base: unsupported PDFs are skipped while valid spreadsheets continue.
+- Bad: `filter_map(Result::ok)` hides access failures and produces an unexplained empty import.
+
+### 6. Tests Required
+
+- Temporary multi-level directory with mixed-case supported extensions.
+- Direct supported file passed without directory walking.
+- Unsupported files excluded.
+- Missing path and traversal failures produce structured errors.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+WalkDir::new(path).into_iter().filter_map(Result::ok)
+```
+
+#### Correct
+
+```rust
+for entry in WalkDir::new(path).follow_links(false) {
+    match entry {
+        Ok(entry) => { /* filter supported files */ }
+        Err(error) => failures.push(error.to_string()),
+    }
+}
+```
