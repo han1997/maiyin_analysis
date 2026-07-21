@@ -1,51 +1,79 @@
 # State Management
 
-> How state is managed in this project.
+## Scenario: backend-paginated people results
 
----
+### 1. Scope / Trigger
 
-## Overview
+This contract applies whenever the result query, history loading, pagination,
+filter controls, loading state, or `WorkspaceSnapshot` changes.
 
-<!--
-Document your project's state management conventions here.
+### 2. Signatures
 
-Questions to answer:
-- What state management solution do you use?
-- How is local vs global state decided?
-- How do you handle server state?
-- What are the patterns for derived state?
--->
+```ts
+interface AppApi {
+  queryPeople(query: PersonQuery): Promise<PersonPage>;
+}
 
-(To be filled by the team)
+interface PersonPage {
+  items: PersonSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+```
 
----
+### 3. Contracts
 
-## State Categories
+- `snapshot` is lightweight server metadata and never owns the people collection.
+- `filterDraft` holds edits that are not yet applied. `query` is the applied backend
+  request and resets to page `1` after snapshot actions or filter application.
+- A snapshot or query change requests exactly one page through `AppApi.queryPeople`.
+- Ignore late responses after effect cleanup so a slower old query cannot replace a
+  newer page.
+- Clear old page items when a request starts, expose `aria-busy`, show a table-shaped
+  skeleton, and disable pagination until the response finishes.
+- Browser mode uses the same API contract but applies `filterPeople` only to fixture
+  data. Production React code never filters the full Tauri result collection locally.
 
-<!-- Local state, global state, server state, URL state -->
+### 4. Validation & Error Matrix
 
-(To be filled by the team)
+| Condition | UI behavior |
+| --- | --- |
+| Minimum age exceeds maximum age | Keep the applied query and page unchanged; show an error toast |
+| Page request fails | Stop the skeleton, keep the shell usable, and show the structured error message |
+| Snapshot becomes empty | Reset page state through the snapshot action and do not issue `queryPeople` |
+| User changes page while a request is active | Pagination buttons remain disabled |
+| An older request resolves after cleanup | Ignore its result |
 
----
+### 5. Good / Base / Bad Cases
 
-## When to Use Global State
+- Good: loading history renders metadata immediately, then fills the first 50 rows.
+- Good: applying `A，B` changes `query`, shows the local skeleton, and receives a page
+  whose total was computed by SQLite.
+- Base: browser preview waits for its fixture adapter and renders the same table shape.
+- Bad: deriving `page` with `filterPeople(snapshot.people, query)` in `App.tsx`.
+- Bad: leaving old-session rows visible while the next session page is loading.
 
-<!-- Criteria for promoting state to global -->
+### 6. Tests Required
 
-(To be filled by the team)
+- Browser workspace waits for the asynchronous page before asserting a person row.
+- Multi-hotel application returns the matching fixture person and excludes nonmatches.
+- Invalid age ranges do not replace the applied page.
+- Loading controls expose a stable table and accessible busy status.
+- `npm test`, `npm run lint`, and `npm run build` pass after contract changes.
 
----
+### 7. Wrong vs Correct
 
-## Server State
+#### Wrong
 
-<!-- How server data is cached and synchronized -->
+```ts
+const page = filterPeople(snapshot.people, query);
+```
 
-(To be filled by the team)
+#### Correct
 
----
+```ts
+const page = await appApi.queryPeople(query);
+```
 
-## Common Mistakes
-
-<!-- State management mistakes your team has made -->
-
-(To be filled by the team)
+The correct path keeps the WebView memory and IPC payload proportional to page size.

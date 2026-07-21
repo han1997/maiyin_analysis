@@ -17,6 +17,7 @@ import_folders(paths: Vec<String>) -> Result<WorkspaceSnapshot, CommandError>
 load_session(session_id: String) -> Result<WorkspaceSnapshot, CommandError>
 merge_sessions(session_ids: Vec<String>) -> Result<WorkspaceSnapshot, CommandError>
 reanalyze(settings: AnalysisSettings) -> Result<WorkspaceSnapshot, CommandError>
+query_people(query: PersonQuery) -> Result<PersonPage, CommandError>
 get_person_detail(person_key: String) -> Result<PersonDetail, CommandError>
 export_result(kind: String, path: String) -> Result<OperationResult, CommandError>
 ```
@@ -34,7 +35,8 @@ Request rules:
 
 Response rules:
 
-- `WorkspaceSnapshot` contains `mode`, `stats`, `people`, `sessions`, `settings`, `importStats`, `sourceSessionIds`, and `generatedAt`.
+- `WorkspaceSnapshot` contains `mode`, `stats`, `sessions`, `settings`, `importStats`, `sourceSessionIds`, and `generatedAt`; it never contains the full people collection.
+- `PersonPage` contains only `items`, `total`, `page`, and `pageSize` for the applied backend query.
 - `PersonDetail` contains one `person`, its rule `alerts`, and on-demand `evidence` rows.
 - `CommandError` always serializes `{ code: string, message: string }`; the UI displays `message` and does not expose Rust internals.
 - Dates crossing the boundary are strings. Rust owns parsing; TypeScript only formats valid display strings.
@@ -42,9 +44,10 @@ Response rules:
 
 Storage rules:
 
-- Sessions are versioned JSON records under `<storageRoot>/MaiyinAnalysisData/sessions`.
+- Sessions use the versioned SQLite database documented in [`database-guidelines.md`](./database-guidelines.md).
 - `storage.json` under the Tauri app-data directory remembers a user-selected storage root.
-- Startup does not automatically show the last session. The index is read for history, and the user explicitly loads a session.
+- Startup does not automatically show the last session. SQLite metadata is read for history, and the user explicitly loads a session.
+- Legacy JSON history is not migrated or read; users re-import the original source files.
 
 ### 4. Validation & Error Matrix
 
@@ -72,7 +75,7 @@ Storage rules:
 
 - Rust unit tests for overlap requiring different hotel/room, same-day non-overlap count, rolling 30/365-day thresholds, score caps, and risk level boundaries.
 - Rust importer tests for title rows before headers, fixed template positions, decorated headers, inferred id/time columns, compact/Excel/text dates, short-stay and duplicate exclusion, and CSV BOM/GBK decoding.
-- Rust storage tests for round-trip session JSON, missing-file cleanup, explicit startup loading, merge de-duplication, and storage-root preference persistence.
+- Rust storage tests for SQLite round-trip, paginated filters, transaction rollback, active-session deletion, and storage-root copying.
 - Export tests for UTF-8 BOM, full identity values, formula-injection prefixing, and risk workbook rows.
 - TypeScript tests for search across identity/household/alert text, level/alert filters, and first render of browser preview.
 - Cross-layer assertions must verify camelCase DTO fields and structured `{ code, message }` errors.
@@ -176,12 +179,13 @@ detail evidence, result filters, imported-record views, history JSON, or exports
 
 ```rust
 reanalyze(settings: AnalysisSettings) -> Result<WorkspaceSnapshot, CommandError>
+query_people(query: PersonQuery) -> Result<PersonPage, CommandError>
 get_imported_records() -> Result<Vec<ImportedStayRecord>, CommandError>
 within_analysis_time_window(record: &Record, settings: &AnalysisSettings) -> bool
 ```
 
 ```ts
-filterPeople(people: PersonSummary[], query: PersonQuery): PersonPage
+appApi.queryPeople(query: PersonQuery): Promise<PersonPage>
 ```
 
 ### 3. Contracts
@@ -189,7 +193,7 @@ filterPeople(people: PersonSummary[], query: PersonQuery): PersonPage
 - `AnalysisSettings` contains only nullable `frequencyStart`/`frequencyEnd`
   plus thresholds for selected-window, 7-day, 30-day, and 365-day frequency.
 - Hotel jurisdiction, household include/exclude, age, and gender belong to
-  frontend `PersonQuery`; changing them must not call `reanalyze` or alter scores.
+  `PersonQuery`; changing them calls `query_people`, not `reanalyze`, and never alters scores.
 - Threshold defaults are `3`, `3`, `12`, and `144` respectively.
 - `get_imported_records` returns only records inside the analysis check-in
   boundary; snapshots do not transfer every raw row through IPC.
@@ -201,8 +205,8 @@ filterPeople(people: PersonSummary[], query: PersonQuery): PersonPage
   hotel name (AND across terms).
 - Populated province/city/county filters must match one shared `hotelRegions`
   entry; never combine components from different stays.
-- Stored sessions use schema version `2`. Loading version `1` re-runs analysis
-  once with the current settings contract and persists the upgraded session.
+- Stored session payloads use schema version `3` inside SQLite database version `1`.
+  This release starts from an empty database and provides no legacy JSON upgrade path.
 - React never computes scores. Selected-window and rolling frequency scoring
   remain mutually exclusive in Rust.
 - Scores are: overlap `min(35, 20 + P*2 + D*5)`, same-day-many
@@ -217,7 +221,7 @@ filterPeople(people: PersonSummary[], query: PersonQuery): PersonPage
 | Result-filter minimum age exceeds maximum age | Frontend toast; do not update the applied query or call Rust |
 | Missing check-in | Exclude from time-window analysis |
 | Old summary lacks `hotelRegions` | Deserialize to an empty list via serde default |
-| Stored session schema is below `2` | Reanalyze from stored records, update stats/analyses, then persist schema `2` |
+| SQLite `user_version` is nonzero and unsupported | `storage_error`; do not attempt an implicit migration |
 
 ### 5. Good / Base / Bad Cases
 
@@ -225,7 +229,7 @@ filterPeople(people: PersonSummary[], query: PersonQuery): PersonPage
   boundary, and no rolling frequency alert scores.
 - Good: `A，B` returns only people whose hotel set fuzzy-matches both terms,
   while their Rust score and alerts remain unchanged.
-- Base: no result filter is active, so the full analyzed people collection is paged.
+- Base: no result filter is active, so SQLite counts the session and returns only the requested page.
 - Bad: adding province, household, age, or gender back to `AnalysisSettings`,
   because this changes the evidence set and reintroduces slow searches.
 - Bad: matching province from one stay and county from another; all populated
@@ -239,9 +243,8 @@ filterPeople(people: PersonSummary[], query: PersonQuery): PersonPage
 - Fuzzy hotel-name filtering matches ordered non-contiguous characters and
   multiple separators use AND semantics.
 - Hotel jurisdiction tests assert same-entry province/city/county matching.
-- Household include/exclude, age, gender, and unknown-age behavior have frontend tests.
-- Legacy settings ignore removed fields, missing `hotelRegions` defaults safely,
-  and schema `1` upgrades exactly once.
+- Household include/exclude, age, gender, alert-state, and search behavior have SQLite query tests; browser fixtures retain matching TypeScript tests.
+- Legacy settings ignore removed analysis fields, and missing `hotelRegions` defaults safely.
 - Frontend build asserts all camelCase DTO fields.
 
 ### 7. Wrong vs Correct
