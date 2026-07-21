@@ -171,3 +171,36 @@ Simplified the analysis workspace with progressive disclosure, a single settings
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Optimize hotel result filters
+
+**Date**: 2026-07-22
+**Task**: Optimize hotel result filters
+**Branch**: `main`
+
+### Summary
+
+Moved jurisdiction, household, age, and gender criteria to local result filtering; added multi-hotel AND matching, structured hotel-region DTOs, and one-time legacy session migration with full frontend and Rust coverage.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `47782f6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

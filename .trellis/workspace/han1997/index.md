@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
+- **Total Sessions**: 6
 - **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~173 | Active |
+| `journal-1.md` | ~206 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-07-22 | Optimize hotel result filters | `47782f6` | `main` |
 | 5 | 2026-07-22 | Simplify analysis workspace UI | `3e9b38c` | `main` |
 | 4 | 2026-07-22 | Sync upstream scoring rules and analysis UI | `f46e12c` | `main` |
 | 3 | 2026-07-21 | Fix legacy XLS import compatibility | `e733117` | `main` |
