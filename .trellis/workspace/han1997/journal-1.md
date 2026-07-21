@@ -39,3 +39,36 @@ Rebuilt the Python/Tkinter hotel-stay analysis tool as a Tauri 2 application wit
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: fix folder recursive import + archive task
+
+**Date**: 2026-07-21
+**Task**: fix folder recursive import + archive task
+**Branch**: `main`
+
+### Summary
+
+Replaced silent expand_folders with discover_supported_files (recursive, case-insensitive, error-surfacing, deduped, empty-folder guard), added Rust unit tests, updated tauri-contract.md and README, ran cargo test + clippy green, committed and archived task 07-16-fix-folder-recursive-import.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `81e689e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
