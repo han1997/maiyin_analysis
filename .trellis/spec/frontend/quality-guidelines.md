@@ -6,46 +6,41 @@
 
 ## Overview
 
-<!--
-Document your project's quality standards here.
-
-Questions to answer:
-- What patterns are forbidden?
-- What linting rules do you enforce?
-- What are your testing requirements?
-- What code review standards apply?
--->
-
-(To be filled by the team)
+The analysis workspace is a dense desktop tool. Keep the primary path visible and move infrequent choices behind standard progressive-disclosure controls. UI simplification must preserve every business capability and must not duplicate scoring or filtering rules in React.
 
 ---
 
 ## Forbidden Patterns
 
-<!-- Patterns that should never be used and why -->
-
-(To be filled by the team)
+- Do not expose the same editable analysis setting in both the sidebar and the settings panel.
+- Do not render one persistent toolbar button per export format. Use one labelled export entry point and list formats inside it.
+- Do not hide risk level text or rely on color alone.
+- Do not introduce custom modal flows when an existing inline region or right-side inspector can support the task.
 
 ---
 
 ## Required Patterns
 
-<!-- Patterns that must always be used -->
-
-(To be filled by the team)
+- Keep person search and the primary risk-level filter directly visible above the results table.
+- Put hotel search, alert-state filtering, and other secondary criteria in a labelled `details` disclosure or equivalent accessible control.
+- Show a count on the secondary-filter trigger when non-default criteria are active.
+- Keep analysis settings editable in `SettingsPanel`; the sidebar may show a read-only summary and a single entry point.
+- Interactive controls require visible focus, hover, active, disabled, and loading feedback.
 
 ---
 
 ## Testing Requirements
 
-<!-- What level of testing is expected -->
-
-(To be filled by the team)
+- Run `npm test`, `npm run lint`, and `npm run build` for every frontend interaction change.
+- Tests for progressive disclosure must assert that the trigger starts closed, opens on activation, and exposes the expected controls or actions.
+- Existing workspace smoke tests must continue to assert that the table and person-detail entry points render.
 
 ---
 
 ## Code Review Checklist
 
-<!-- What reviewers should check -->
-
-(To be filled by the team)
+- Primary actions remain visible without opening a menu.
+- Secondary controls remain keyboard reachable and have plain-language labels.
+- Narrow-window rules keep controls usable without compressing data-table columns.
+- Empty and no-result states tell the user what to do next.
+- No Tauri API, DTO, or scoring behavior changed as part of a visual-only task.

@@ -318,24 +318,15 @@ function App() {
 
         <section className="sidebar-section scope-section">
           <div className="section-heading">
-            <div><span className="step-number">03</span><h2>分析口径</h2></div>
-            <button className="text-button" type="button" onClick={openSettings}>调整</button>
+            <div><span className="step-number">03</span><h2>当前分析口径</h2></div>
           </div>
           <dl className="scope-summary">
             <div><dt>入住辖区</dt><dd>{joinScope([snapshot.settings.province, snapshot.settings.city, snapshot.settings.county])}</dd></div>
             <div><dt>户籍条件</dt><dd>{snapshot.settings.excludeHouseholdCounty ? `排除 ${snapshot.settings.excludeHouseholdCounty}` : "不限"}</dd></div>
+            <div><dt>频次规则</dt><dd>{frequencyScopeLabel(snapshot.settings)}</dd></div>
           </dl>
-          {draftSettings && <div className="sidebar-parameters">
-            <span className="sidebar-parameter-title">选定入住时间</span>
-            <DateTimeField label="开始" value={draftSettings.frequencyStart} onChange={(value) => setDraftSettings({ ...draftSettings, frequencyStart: value })}/>
-            <DateTimeField label="结束" value={draftSettings.frequencyEnd} onChange={(value) => setDraftSettings({ ...draftSettings, frequencyEnd: value })}/>
-            <NumberField label="范围阈值" value={draftSettings.frequencyThreshold} onChange={(value) => setDraftSettings({ ...draftSettings, frequencyThreshold: value ?? 1 })} required/>
-            <span className="sidebar-parameter-title">高频入住阈值</span>
-            <div className="sidebar-thresholds"><NumberField label="7天" value={draftSettings.weekThreshold} onChange={(value) => setDraftSettings({ ...draftSettings, weekThreshold: value ?? 1 })} required/><NumberField label="30天" value={draftSettings.monthThreshold} onChange={(value) => setDraftSettings({ ...draftSettings, monthThreshold: value ?? 1 })} required/><NumberField label="365天" value={draftSettings.yearThreshold} onChange={(value) => setDraftSettings({ ...draftSettings, yearThreshold: value ?? 1 })} required/></div>
-            <button className="button button-primary full-width" type="button" disabled={busy === "reanalyze" || snapshot.mode === "empty"} onClick={applySettings}>应用参数</button>
-          </div>}
           <button className="button button-secondary full-width" type="button" onClick={openSettings}>
-            <Icon name="settings" /> 查看全部参数
+            <Icon name="settings" /> 调整分析参数
           </button>
         </section>
 
@@ -392,23 +383,25 @@ function App() {
                 />
                 {filterDraft.search && <button type="button" aria-label="清除搜索" onClick={() => setFilterDraft((current) => ({ ...current, search: "" }))}><Icon name="close" size={15} /></button>}
               </div>
-              <input className="toolbar-input" aria-label="旅馆名称" placeholder="旅馆名称（支持模糊搜索）" value={filterDraft.hotelSearch} onChange={(event) => setFilterDraft((current) => ({ ...current, hotelSearch: event.target.value }))} />
               <select aria-label="风险等级" value={filterDraft.level} onChange={(event) => setFilterDraft((current) => ({ ...current, level: event.target.value as PersonQuery["level"] }))}>
                 {riskLevels.map((level) => <option key={level}>{level}</option>)}
               </select>
-              <select aria-label="预警状态" value={filterDraft.alertState} onChange={(event) => setFilterDraft((current) => ({ ...current, alertState: event.target.value as PersonQuery["alertState"] }))}>
-                <option>全部人员</option><option>仅预警人员</option><option>未预警人员</option>
-              </select>
               <button className="button button-primary compact" type="button" onClick={() => setQuery({ ...filterDraft, page: 1 })}>应用筛选</button>
-              <button className="button button-quiet compact" type="button" onClick={() => { setFilterDraft(initialQuery); setQuery(initialQuery); }}>重置</button>
+              <details className="toolbar-menu filter-menu">
+                <summary className="button button-quiet compact"><Icon name="filter" size={16} /> 更多筛选{activeExtraFilterCount(filterDraft) > 0 && <span className="filter-count">{activeExtraFilterCount(filterDraft)}</span>}</summary>
+                <div className="toolbar-popover filter-popover">
+                  <label className="field"><span>旅馆名称</span><input placeholder="支持模糊搜索" value={filterDraft.hotelSearch} onChange={(event) => setFilterDraft((current) => ({ ...current, hotelSearch: event.target.value }))} /></label>
+                  <label className="field"><span>预警状态</span><select value={filterDraft.alertState} onChange={(event) => setFilterDraft((current) => ({ ...current, alertState: event.target.value as PersonQuery["alertState"] }))}><option>全部人员</option><option>仅预警人员</option><option>未预警人员</option></select></label>
+                  <div className="popover-actions"><button className="text-button" type="button" onClick={() => { setFilterDraft(initialQuery); setQuery(initialQuery); }}>清除全部筛选</button></div>
+                </div>
+              </details>
               <div className="toolbar-spacer" />
-              <div className="export-group" aria-label="导出当前结果">
-                {exportActions.map((action) => (
-                  <button key={action.kind} className="button button-quiet compact" type="button" disabled={busy === "export"} onClick={() => exportResult(action.kind)}>
-                    <Icon name="download" size={16} /> {action.label}
-                  </button>
-                ))}
-              </div>
+              <details className="toolbar-menu export-menu">
+                <summary className="button button-secondary compact"><Icon name="download" size={16} /> 导出</summary>
+                <div className="toolbar-popover export-popover" aria-label="导出当前结果">
+                  {exportActions.map((action) => <button key={action.kind} type="button" disabled={busy === "export"} onClick={() => exportResult(action.kind)}><span>{action.label}</span><Icon name="chevronRight" size={15} /></button>)}
+                </div>
+              </details>
             </div>
 
             <div className="table-frame">
@@ -595,7 +588,7 @@ function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm }
 }
 
 function EmptyWorkspace({ onFiles, onFolder }: { onFiles: () => void; onFolder: () => void }) {
-  return <section className="empty-workspace"><div className="empty-illustration" aria-hidden="true"><Icon name="file" size={38}/><span><Icon name="search" size={20}/></span></div><h2>导入数据开始研判</h2><p>支持多个 Excel、CSV 文件或整个文件夹。应用会自动识别数据页、清洗重复记录并保留可复核证据。</p><div><button className="button button-primary" type="button" onClick={onFiles}><Icon name="upload"/>选择文件</button><button className="button button-secondary" type="button" onClick={onFolder}><Icon name="folder"/>选择文件夹</button></div><small><Icon name="shield" size={15}/> 文件内容不会上传到网络</small></section>;
+  return <section className="empty-workspace"><div className="empty-illustration" aria-hidden="true"><Icon name="file" size={38}/><span><Icon name="search" size={20}/></span></div><span className="empty-kicker">第一步</span><h2>导入入住数据</h2><p>选择 Excel、CSV 文件或整个文件夹。导入后会自动清洗记录、计算风险并保留核查证据。</p><div><button className="button button-primary" type="button" onClick={onFiles}><Icon name="upload"/>选择文件</button><button className="button button-secondary" type="button" onClick={onFolder}><Icon name="folder"/>选择文件夹</button></div><small><Icon name="shield" size={15}/> 全程在本机处理，不上传文件</small></section>;
 }
 
 function LoadingShell() {
@@ -607,6 +600,15 @@ function modeLabel(mode: WorkspaceSnapshot["mode"]): string {
   if (mode === "combined") return "合并分析";
   if (mode === "session") return "历史会话";
   return "空工作区";
+}
+
+function frequencyScopeLabel(settings: AnalysisSettings): string {
+  if (settings.frequencyStart || settings.frequencyEnd) return `选定范围 ≥ ${settings.frequencyThreshold} 次`;
+  return `7/30/365 天：${settings.weekThreshold}/${settings.monthThreshold}/${settings.yearThreshold} 次`;
+}
+
+function activeExtraFilterCount(query: PersonQuery): number {
+  return Number(Boolean(query.hotelSearch?.trim())) + Number((query.alertState ?? "全部人员") !== "全部人员");
 }
 
 function errorMessage(error: unknown): string {

@@ -10,6 +10,7 @@ export type IconName =
   | "database"
   | "download"
   | "file"
+  | "filter"
   | "folder"
   | "history"
   | "info"
@@ -32,6 +33,7 @@ const paths: Record<IconName, React.ReactNode> = {
   database: <><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></>,
   download: <><path d="M12 3v12m0 0 5-5m-5 5-5-5"/><path d="M5 20h14"/></>,
   file: <><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></>,
+  filter: <><path d="M4 6h16M7 12h10M10 18h4"/></>,
   folder: <path d="M3 6h7l2 2h9v11H3z"/>,
   history: <><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></>,
   info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></>,
@@ -68,4 +70,3 @@ export function Icon({ name, size = 18, ...props }: IconProps) {
     </svg>
   );
 }
-
