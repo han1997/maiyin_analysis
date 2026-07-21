@@ -117,7 +117,6 @@ export interface WorkspaceSnapshot {
   title: string;
   subtitle: string;
   stats: AnalysisStats;
-  people: PersonSummary[];
   sessions: SessionSummary[];
   settings: AnalysisSettings;
   importStats: ImportStats;

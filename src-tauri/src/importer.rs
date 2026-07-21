@@ -3,6 +3,7 @@ use crate::model::{calculate_age, ImportStats, Record};
 use calamine::{open_workbook_auto, Reader};
 use chrono::{Duration, Local, NaiveDate, NaiveDateTime};
 use encoding_rs::GBK;
+use rayon::prelude::*;
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -41,6 +42,12 @@ pub struct ImportedData {
     pub stats: ImportStats,
     pub file_count: usize,
     pub title: String,
+}
+
+struct ParsedFile {
+    records: Vec<Record>,
+    stats: ImportStats,
+    reason: Option<String>,
 }
 
 pub fn discover_supported_files(paths: &[String]) -> Result<Vec<String>, AppError> {
@@ -95,123 +102,31 @@ pub fn import_paths(paths: &[String]) -> Result<ImportedData, AppError> {
         ));
     }
 
+    let parsed = files
+        .par_iter()
+        .map(|path| parse_file(path))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+
     let mut stats = ImportStats::default();
     let mut records = Vec::new();
     let mut seen = HashSet::new();
     let mut uid = 1_u64;
     let mut reasons = Vec::new();
-
-    for path in &files {
-        let rows = read_table(path)?;
-        let (header_index, mut indexes, score) = detect_header_row(&rows);
-        let data_start = if indexes.get("id_no").is_some_and(|items| !items.is_empty())
-            && indexes
-                .get("check_in")
-                .is_some_and(|items| !items.is_empty())
-        {
-            header_index + 1
-        } else if let Some(start) = detect_template_data_start(&rows) {
-            indexes = template_indexes();
-            start
-        } else if let Some((start, inferred)) = infer_core_fields(&rows, indexes) {
-            indexes = inferred;
-            start
-        } else {
-            reasons.push(format!(
-                "{} 未识别到证件号码或入住时间列（表头得分 {}）",
-                file_name(path),
-                score
-            ));
-            continue;
-        };
-
-        for (row_index, row) in rows.iter().enumerate().skip(data_start) {
-            if row.iter().all(|value| value.trim().is_empty()) {
-                continue;
-            }
-            let id_no = compact_identity(&pick(row, indexes.get("id_no")));
-            let check_in_text = pick(row, indexes.get("check_in"));
-            if id_no.is_empty() || check_in_text.trim().is_empty() {
-                stats.missing_id_count += 1;
-                continue;
-            }
-
-            let check_in = parse_datetime(&check_in_text);
-            let check_out_text = pick(row, indexes.get("check_out"));
-            let check_out = parse_datetime(&check_out_text);
-            let register_time_text = pick(row, indexes.get("register_time"));
-            let register_time = parse_datetime(&register_time_text);
-            let mut issues = Vec::new();
-            if check_in.is_none() {
-                issues.push("入住时间无法解析".into());
-            }
-            if !check_out_text.is_empty() && check_out.is_none() {
-                issues.push("退房时间无法解析".into());
-            }
-            if let (Some(start), Some(end)) = (check_in, check_out) {
-                if end <= start {
-                    issues.push("退房时间早于或等于入住时间".into());
-                }
-                if end - start < Duration::minutes(10) {
-                    stats.short_stay_count += 1;
-                    continue;
-                }
-            }
-
-            let area = lookup_identity_area(&id_no);
-            let source_household = pick(row, indexes.get("household_region"));
-            let household_region = if area.region().is_empty() {
-                source_household
-            } else {
-                area.region()
-            };
-            let birth = identity_birth_date(&id_no)
-                .or_else(|| parse_date(&pick(row, indexes.get("birth_date"))));
-            let age = parse_age(&pick(row, indexes.get("age")))
-                .or_else(|| calculate_age(birth, Local::now().date_naive()));
-            let gender = normalize_gender(&pick(row, indexes.get("gender")), &id_no);
-
-            let record = Record {
-                uid,
-                source_file: file_name(path),
-                source_row: row_index + 1,
-                name: pick(row, indexes.get("name")),
-                id_no: id_no.clone(),
-                phone: pick(row, indexes.get("phone")),
-                hotel_name: pick(row, indexes.get("hotel_name")),
-                province: pick(row, indexes.get("province")),
-                city: pick(row, indexes.get("city")),
-                county: pick(row, indexes.get("county")),
-                region: pick(row, indexes.get("region")),
-                address: pick(row, indexes.get("address")),
-                room_no: pick(row, indexes.get("room_no")),
-                check_in_text,
-                register_time_text,
-                check_out_text,
-                check_in,
-                register_time,
-                check_out,
-                person_key: format!("id:{id_no}"),
-                household_province: nonempty(
-                    pick(row, indexes.get("household_province")),
-                    &area.province,
-                ),
-                household_city: nonempty(pick(row, indexes.get("household_city")), &area.city),
-                household_county: nonempty(
-                    pick(row, indexes.get("household_county")),
-                    &area.county,
-                ),
-                household_region,
-                household_address: pick(row, indexes.get("household_address")),
-                age,
-                gender,
-                issues,
-            };
+    for parsed_file in parsed {
+        stats.short_stay_count += parsed_file.stats.short_stay_count;
+        stats.missing_id_count += parsed_file.stats.missing_id_count;
+        if let Some(reason) = parsed_file.reason {
+            reasons.push(reason);
+        }
+        for mut record in parsed_file.records {
             let key = deduplication_key(&record);
             if !seen.insert(key) {
                 stats.duplicate_count += 1;
                 continue;
             }
+            record.uid = uid;
             records.push(record);
             uid += 1;
         }
@@ -236,6 +151,122 @@ pub fn import_paths(paths: &[String]) -> Result<ImportedData, AppError> {
         stats,
         file_count: files.len(),
         title,
+    })
+}
+
+fn parse_file(path: &Path) -> Result<ParsedFile, AppError> {
+    let rows = read_table(path)?;
+    let (header_index, mut indexes, score) = detect_header_row(&rows);
+    let data_start = if indexes.get("id_no").is_some_and(|items| !items.is_empty())
+        && indexes
+            .get("check_in")
+            .is_some_and(|items| !items.is_empty())
+    {
+        header_index + 1
+    } else if let Some(start) = detect_template_data_start(&rows) {
+        indexes = template_indexes();
+        start
+    } else if let Some((start, inferred)) = infer_core_fields(&rows, indexes) {
+        indexes = inferred;
+        start
+    } else {
+        return Ok(ParsedFile {
+            records: vec![],
+            stats: ImportStats::default(),
+            reason: Some(format!(
+                "{} 未识别到证件号码或入住时间列（表头得分 {}）",
+                file_name(path),
+                score
+            )),
+        });
+    };
+
+    let mut stats = ImportStats::default();
+    let mut records = Vec::new();
+    for (row_index, row) in rows.iter().enumerate().skip(data_start) {
+        if row.iter().all(|value| value.trim().is_empty()) {
+            continue;
+        }
+        let id_no = compact_identity(&pick(row, indexes.get("id_no")));
+        let check_in_text = pick(row, indexes.get("check_in"));
+        if id_no.is_empty() || check_in_text.trim().is_empty() {
+            stats.missing_id_count += 1;
+            continue;
+        }
+
+        let check_in = parse_datetime(&check_in_text);
+        let check_out_text = pick(row, indexes.get("check_out"));
+        let check_out = parse_datetime(&check_out_text);
+        let register_time_text = pick(row, indexes.get("register_time"));
+        let register_time = parse_datetime(&register_time_text);
+        let mut issues = Vec::new();
+        if check_in.is_none() {
+            issues.push("入住时间无法解析".into());
+        }
+        if !check_out_text.is_empty() && check_out.is_none() {
+            issues.push("退房时间无法解析".into());
+        }
+        if let (Some(start), Some(end)) = (check_in, check_out) {
+            if end <= start {
+                issues.push("退房时间早于或等于入住时间".into());
+            }
+            if end - start < Duration::minutes(10) {
+                stats.short_stay_count += 1;
+                continue;
+            }
+        }
+
+        let area = lookup_identity_area(&id_no);
+        let source_household = pick(row, indexes.get("household_region"));
+        let household_region = if area.region().is_empty() {
+            source_household
+        } else {
+            area.region()
+        };
+        let birth = identity_birth_date(&id_no)
+            .or_else(|| parse_date(&pick(row, indexes.get("birth_date"))));
+        let age = parse_age(&pick(row, indexes.get("age")))
+            .or_else(|| calculate_age(birth, Local::now().date_naive()));
+        let gender = normalize_gender(&pick(row, indexes.get("gender")), &id_no);
+
+        records.push(Record {
+            uid: 0,
+            source_file: file_name(path),
+            source_row: row_index + 1,
+            name: pick(row, indexes.get("name")),
+            id_no: id_no.clone(),
+            phone: pick(row, indexes.get("phone")),
+            hotel_name: pick(row, indexes.get("hotel_name")),
+            province: pick(row, indexes.get("province")),
+            city: pick(row, indexes.get("city")),
+            county: pick(row, indexes.get("county")),
+            region: pick(row, indexes.get("region")),
+            address: pick(row, indexes.get("address")),
+            room_no: pick(row, indexes.get("room_no")),
+            check_in_text,
+            register_time_text,
+            check_out_text,
+            check_in,
+            register_time,
+            check_out,
+            person_key: format!("id:{id_no}"),
+            household_province: nonempty(
+                pick(row, indexes.get("household_province")),
+                &area.province,
+            ),
+            household_city: nonempty(pick(row, indexes.get("household_city")), &area.city),
+            household_county: nonempty(pick(row, indexes.get("household_county")), &area.county),
+            household_region,
+            household_address: pick(row, indexes.get("household_address")),
+            age,
+            gender,
+            issues,
+        });
+    }
+    Ok(ParsedFile {
+        records,
+        stats,
+        reason: None,
     })
 }
 
@@ -766,7 +797,8 @@ fn file_name(path: &Path) -> String {
 
 #[cfg(test)]
 mod discovery_tests {
-    use super::{discover_supported_files, legacy_cells_to_rows};
+    use super::{discover_supported_files, import_paths, legacy_cells_to_rows, parse_file};
+    use rayon::prelude::*;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -829,6 +861,102 @@ mod discovery_tests {
         assert_eq!(rows[0][4], "证件号码");
         assert_eq!(rows[0][7], "入住时间");
         assert_eq!(rows[1][4], "320111195906152045");
+    }
+
+    #[test]
+    fn parallel_file_parsing_merges_deterministically() {
+        let root = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("a.csv");
+        let second = root.join("b.csv");
+        let header = "姓名,身份证号,旅馆名称,入住时间,退房时间\n";
+        fs::write(
+            &first,
+            format!("{header}甲,341024198809128135,旅馆A,2026-05-01 10:00,2026-05-01 12:00\n"),
+        )
+        .unwrap();
+        fs::write(
+            &second,
+            format!(
+                "{header}甲,341024198809128135,旅馆A,2026-05-01 10:00,2026-05-01 12:00\n乙,320111195906152045,旅馆B,2026-05-02 10:00,2026-05-02 12:00\n"
+            ),
+        )
+        .unwrap();
+        let paths = vec![
+            first.to_string_lossy().into_owned(),
+            second.to_string_lossy().into_owned(),
+        ];
+
+        let first_run = import_paths(&paths).unwrap();
+        let second_run = import_paths(&paths).unwrap();
+        let identity = |data: &super::ImportedData| {
+            data.records
+                .iter()
+                .map(|record| (record.uid, record.source_file.clone(), record.id_no.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(identity(&first_run), identity(&second_run));
+        assert_eq!(first_run.stats.duplicate_count, 1);
+        assert_eq!(first_run.records.len(), 2);
+        assert_eq!(first_run.records[0].source_file, "a.csv");
+        assert_eq!(first_run.records[1].source_file, "b.csv");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parallel_parse_errors_follow_input_order() {
+        let root = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("first.xlsx");
+        let second = root.join("second.xlsx");
+        fs::write(&first, b"not an xlsx").unwrap();
+        fs::write(&second, b"also not an xlsx").unwrap();
+        let error = import_paths(&[
+            first.to_string_lossy().into_owned(),
+            second.to_string_lossy().into_owned(),
+        ])
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("first.xlsx"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires MAIYIN_BENCH_FILE"]
+    fn benchmark_parallel_file_parsing() {
+        let path = PathBuf::from(
+            std::env::var("MAIYIN_BENCH_FILE").expect("set MAIYIN_BENCH_FILE to a source file"),
+        );
+        let copies = std::env::var("MAIYIN_BENCH_COPIES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(15);
+        let files = vec![path; copies];
+        let sequential_started = std::time::Instant::now();
+        let sequential = files
+            .iter()
+            .map(|path| parse_file(path))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let sequential_elapsed = sequential_started.elapsed();
+        let parallel_started = std::time::Instant::now();
+        let parallel = files
+            .par_iter()
+            .map(|path| parse_file(path))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let parallel_elapsed = parallel_started.elapsed();
+        let reduction = 1.0
+            - parallel_elapsed.as_secs_f64() / sequential_elapsed.as_secs_f64().max(f64::EPSILON);
+        println!(
+            "files={} sequential_ms={} parallel_ms={} reduction_percent={:.1}",
+            copies,
+            sequential_elapsed.as_millis(),
+            parallel_elapsed.as_millis(),
+            reduction * 100.0,
+        );
+        assert_eq!(sequential.len(), parallel.len());
     }
 }
 

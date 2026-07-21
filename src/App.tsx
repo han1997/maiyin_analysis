@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { appApi } from "./api";
 import { Icon } from "./components/Icon";
 import { RiskBadge, SeverityBadge } from "./components/RiskBadge";
@@ -8,11 +8,11 @@ import type {
   ExportKind,
   ImportedStayRecord,
   PersonDetail,
+  PersonPage,
   PersonQuery,
   RiskLevel,
   WorkspaceSnapshot,
 } from "./domain/types";
-import { filterPeople } from "./lib/filter";
 import { formatDateTime, formatInteger, maskIdentity, maskPhone } from "./lib/format";
 
 type BusyAction = "boot" | "import" | "reanalyze" | "session" | "export" | "delete" | null;
@@ -50,11 +50,20 @@ const initialQuery: PersonQuery = {
   pageSize: 50,
 };
 
+const initialPage: PersonPage = {
+  items: [],
+  total: 0,
+  page: 1,
+  pageSize: initialQuery.pageSize,
+};
+
 function App() {
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot | null>(null);
   const [busy, setBusy] = useState<BusyAction>("boot");
   const [toast, setToast] = useState<ToastState | null>(null);
   const [query, setQuery] = useState<PersonQuery>(initialQuery);
+  const [page, setPage] = useState<PersonPage>(initialPage);
+  const [pageLoading, setPageLoading] = useState(false);
   const [filterDraft, setFilterDraft] = useState<PersonQuery>(initialQuery);
   const [activeView, setActiveView] = useState<"people" | "records">("people");
   const [importedRecords, setImportedRecords] = useState<ImportedStayRecord[]>([]);
@@ -94,14 +103,32 @@ function App() {
     return () => window.clearTimeout(timeout);
   }, [toast]);
 
-  const page = useMemo(
-    () =>
-      filterPeople(snapshot?.people ?? [], {
-        ...query,
-        page: Math.max(1, query.page),
-      }),
-    [snapshot?.people, query],
-  );
+  useEffect(() => {
+    if (!snapshot || snapshot.mode === "empty") {
+      return;
+    }
+    let active = true;
+    Promise.resolve()
+      .then(() => {
+        if (!active) return null;
+        setPageLoading(true);
+        setPage((current) => ({ ...current, items: [], page: query.page, pageSize: query.pageSize }));
+        return appApi.queryPeople({ ...query, page: Math.max(1, query.page) });
+      })
+      .then((nextPage) => {
+        if (active && nextPage) setPage(nextPage);
+      })
+      .catch((error: unknown) => {
+        if (active) setToast({ tone: "error", message: errorMessage(error) });
+      })
+      .finally(() => {
+        if (active) setPageLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [snapshot, query]);
+
   const totalPages = Math.max(1, Math.ceil(page.total / page.pageSize));
   const activeSession = snapshot?.sessions.find((session) => session.active);
 
@@ -111,6 +138,7 @@ function App() {
       const next = await operation();
       if (next) {
         setSnapshot(next);
+        setPage(initialPage);
         setDraftSettings(structuredClone(next.settings));
         setQuery((current) => ({ ...current, page: 1 }));
         setDetail(null);
@@ -452,7 +480,7 @@ function App() {
               </details>
             </div>
 
-            <div className="table-frame">
+            <div className="table-frame" aria-busy={pageLoading}>
               <table>
                 <thead>
                   <tr>
@@ -483,15 +511,15 @@ function App() {
                   ))}
                 </tbody>
               </table>
-              {page.items.length === 0 && <div className="no-results"><Icon name="search" size={22} /><strong>没有符合条件的人员</strong><span>调整搜索词或筛选条件后重试。</span></div>}
+              {pageLoading && page.items.length === 0 ? <TableSkeleton /> : page.items.length === 0 && <div className="no-results"><Icon name="search" size={22} /><strong>没有符合条件的人员</strong><span>调整搜索词或筛选条件后重试。</span></div>}
             </div>
 
             <footer className="table-footer">
               <span>共 {formatInteger(page.total)} 人，每页 {page.pageSize} 人</span>
               <div className="pagination">
-                <button className="icon-button" type="button" aria-label="上一页" disabled={query.page <= 1} onClick={() => setQuery((current) => ({ ...current, page: current.page - 1 }))}><Icon name="chevronLeft" /></button>
+                <button className="icon-button" type="button" aria-label="上一页" disabled={pageLoading || query.page <= 1} onClick={() => setQuery((current) => ({ ...current, page: current.page - 1 }))}><Icon name="chevronLeft" /></button>
                 <span>第 {query.page} / {totalPages} 页</span>
-                <button className="icon-button" type="button" aria-label="下一页" disabled={query.page >= totalPages} onClick={() => setQuery((current) => ({ ...current, page: current.page + 1 }))}><Icon name="chevronRight" /></button>
+                <button className="icon-button" type="button" aria-label="下一页" disabled={pageLoading || query.page >= totalPages} onClick={() => setQuery((current) => ({ ...current, page: current.page + 1 }))}><Icon name="chevronRight" /></button>
               </div>
             </footer>
           </section>
@@ -520,6 +548,10 @@ function App() {
       {toast && <div className={`toast toast-${toast.tone}`} role="status"><Icon name={toast.tone === "error" ? "warning" : "info"} size={17} /><span>{toast.message}</span><button type="button" aria-label="关闭提示" onClick={() => setToast(null)}><Icon name="close" size={15} /></button></div>}
     </div>
   );
+}
+
+function TableSkeleton() {
+  return <div className="table-skeleton" role="status" aria-label="正在加载人员结果">{Array.from({ length: 6 }, (_, index) => <span key={index} />)}</div>;
 }
 
 function ImportedRecordsTable({ records, showSensitive }: { records: ImportedStayRecord[]; showSensitive: boolean }) {

@@ -4,6 +4,8 @@ import type {
   OperationResult,
   ImportedStayRecord,
   PersonDetail,
+  PersonPage,
+  PersonQuery,
   WorkspaceSnapshot,
 } from "../domain/types";
 
@@ -17,6 +19,7 @@ export interface AppApi {
   deleteSession(sessionId: string): Promise<WorkspaceSnapshot>;
   clearWorkspace(): Promise<WorkspaceSnapshot>;
   reanalyze(settings: AnalysisSettings): Promise<WorkspaceSnapshot>;
+  queryPeople(query: PersonQuery): Promise<PersonPage>;
   getPersonDetail(personKey: string): Promise<PersonDetail>;
   getImportedRecords(): Promise<ImportedStayRecord[]>;
   exportResult(kind: ExportKind): Promise<OperationResult>;

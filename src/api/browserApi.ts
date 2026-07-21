@@ -1,5 +1,6 @@
-import { demoSnapshot, getDemoDetail } from "../data/demo";
+import { demoPeople, demoSnapshot, getDemoDetail } from "../data/demo";
 import { DEFAULT_SETTINGS, type AnalysisSettings, type ExportKind, type WorkspaceSnapshot } from "../domain/types";
+import { filterPeople } from "../lib/filter";
 import type { AppApi } from "./contract";
 
 const pause = (duration = 320) => new Promise((resolve) => window.setTimeout(resolve, duration));
@@ -14,7 +15,6 @@ function emptySnapshot(): WorkspaceSnapshot {
     title: "尚未载入数据",
     subtitle: "选择 Excel、CSV 或历史会话开始分析",
     stats: { records: 0, people: 0, alerted: 0, high: 0, issues: 0 },
-    people: [],
     sessions: cloneSnapshot(demoSnapshot).sessions.map((session) => ({ ...session, active: false })),
     settings: { ...DEFAULT_SETTINGS },
     importStats: { imported: 0, duplicateCount: 0, shortStayCount: 0, missingIdCount: 0 },
@@ -110,6 +110,11 @@ export const browserApi: AppApi = {
     next.subtitle = "已按当前分析参数重新计算（浏览器演示）";
     next.generatedAt = new Date().toISOString();
     return next;
+  },
+
+  async queryPeople(query) {
+    await pause(80);
+    return filterPeople(demoPeople, query);
   },
 
   async getPersonDetail(personKey) {

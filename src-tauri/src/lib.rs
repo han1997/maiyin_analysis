@@ -29,6 +29,7 @@ pub fn run() {
             commands::delete_session,
             commands::clear_workspace,
             commands::reanalyze,
+            commands::query_people,
             commands::get_person_detail,
             commands::get_imported_records,
             commands::export_result,

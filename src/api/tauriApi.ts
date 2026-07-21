@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { AnalysisSettings, ExportKind, ImportedStayRecord, OperationResult, PersonDetail } from "../domain/types";
+import type { AnalysisSettings, ExportKind, ImportedStayRecord, OperationResult, PersonDetail, PersonPage, PersonQuery } from "../domain/types";
 import type { AppApi } from "./contract";
 
 async function selectPaths(directory: boolean): Promise<string[]> {
@@ -34,6 +34,7 @@ export const tauriApi: AppApi = {
   deleteSession: (sessionId) => invoke("delete_session", { sessionId }),
   clearWorkspace: () => invoke("clear_workspace"),
   reanalyze: (settings: AnalysisSettings) => invoke("reanalyze", { settings }),
+  queryPeople: (query: PersonQuery): Promise<PersonPage> => invoke("query_people", { query }),
   getPersonDetail: (personKey): Promise<PersonDetail> => invoke("get_person_detail", { personKey }),
   getImportedRecords: (): Promise<ImportedStayRecord[]> => invoke("get_imported_records"),
   async exportResult(kind: ExportKind): Promise<OperationResult> {

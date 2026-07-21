@@ -12,7 +12,7 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "7月上旬旅馆数据" }, { timeout: 2_000 })).toBeTruthy();
     expect(screen.getByRole("table")).toBeTruthy();
     expect(screen.getByText("浏览器演示模式")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /查看 周明远 详情/ })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /查看 周明远 详情/ })).toBeTruthy();
   });
 
   it("keeps secondary filters and export formats behind clear entry points", async () => {
@@ -41,7 +41,7 @@ describe("App", () => {
     fireEvent.change(screen.getByPlaceholderText("例如：旅馆 A，旅馆 B"), { target: { value: "阊江，牯牛降" } });
     fireEvent.click(screen.getByRole("button", { name: "应用筛选" }));
 
-    expect(screen.getByRole("button", { name: /查看 周明远 详情/ })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /查看 周明远 详情/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /查看 林婉清 详情/ })).toBeNull();
   });
 
@@ -66,6 +66,6 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "应用筛选" }));
 
     expect(screen.getByText("最小年龄不能大于最大年龄。")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /查看 周明远 详情/ })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /查看 周明远 详情/ })).toBeTruthy();
   });
 });

@@ -3,10 +3,10 @@ use crate::error::{AppError, CommandError};
 use crate::exporter::{export_to, OperationResult};
 use crate::importer;
 use crate::model::{
-    format_datetime, AnalysisSettings, EvidenceRecord, ImportedStayRecord, PersonDetail,
+    format_datetime, AnalysisSettings, ImportedStayRecord, PersonDetail, PersonPage, PersonQuery,
     StoredSession, WorkspaceSnapshot, CURRENT_SCHEMA_VERSION,
 };
-use crate::storage::SessionStore;
+use crate::storage::{SessionMetadata, SessionStore};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -22,7 +22,7 @@ pub struct AppState {
 
 struct BackendState {
     store: SessionStore,
-    current: Option<StoredSession>,
+    current: Option<SessionMetadata>,
     preference_path: PathBuf,
 }
 
@@ -45,7 +45,7 @@ impl AppState {
 #[tauri::command]
 pub fn bootstrap_workspace(state: State<'_, AppState>) -> Result<WorkspaceSnapshot, CommandError> {
     let backend = lock(&state)?;
-    Ok(snapshot(&backend))
+    Ok(snapshot(&backend)?)
 }
 
 #[tauri::command]
@@ -53,40 +53,45 @@ pub async fn import_paths(
     paths: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, CommandError> {
-    let imported = tauri::async_runtime::spawn_blocking(move || importer::import_paths(&paths))
-        .await
-        .map_err(|error| CommandError {
-            code: "task_error",
-            message: error.to_string(),
-        })??;
-    let mut backend = lock(&state)?;
-    let settings = backend
-        .current
-        .as_ref()
-        .map(|session| session.settings.clone())
-        .unwrap_or_default();
-    let (analyses, stats) = analyze_records(&imported.records, &settings);
-    let session = StoredSession {
-        schema_version: CURRENT_SCHEMA_VERSION,
-        session_id: format!(
-            "{}-{}",
-            Local::now().timestamp_millis(),
-            &Uuid::new_v4().simple().to_string()[..8]
-        ),
-        file_name: imported.title,
-        imported_at: Local::now().to_rfc3339(),
-        file_count: imported.file_count,
-        settings,
-        records: imported.records,
-        analyses,
-        stats,
-        import_stats: imported.stats,
-        source_session_ids: vec![],
-        is_combined: false,
+    let (store, settings) = {
+        let backend = lock(&state)?;
+        (
+            backend.store.clone(),
+            backend
+                .current
+                .as_ref()
+                .map(|session| session.settings.clone())
+                .unwrap_or_default(),
+        )
     };
-    backend.store.save(&session)?;
-    backend.current = Some(session);
-    Ok(snapshot(&backend))
+    let metadata = tauri::async_runtime::spawn_blocking(move || {
+        let imported = importer::import_paths(&paths)?;
+        let (analyses, stats) = analyze_records(&imported.records, &settings);
+        let session = StoredSession {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            session_id: format!(
+                "{}-{}",
+                Local::now().timestamp_millis(),
+                &Uuid::new_v4().simple().to_string()[..8]
+            ),
+            file_name: imported.title,
+            imported_at: Local::now().to_rfc3339(),
+            file_count: imported.file_count,
+            settings,
+            records: imported.records,
+            analyses,
+            stats,
+            import_stats: imported.stats,
+            source_session_ids: vec![],
+            is_combined: false,
+        };
+        store.save(&session)
+    })
+    .await
+    .map_err(task_error)??;
+    let mut backend = lock(&state)?;
+    backend.current = Some(metadata);
+    Ok(snapshot(&backend)?)
 }
 
 #[tauri::command]
@@ -97,10 +102,7 @@ pub async fn import_folders(
     let files =
         tauri::async_runtime::spawn_blocking(move || importer::discover_supported_files(&paths))
             .await
-            .map_err(|error| CommandError {
-                code: "task_error",
-                message: error.to_string(),
-            })??;
+            .map_err(task_error)??;
     if files.is_empty() {
         return Err(
             AppError::Empty("所选文件夹及其子目录中没有 .xls、.xlsx 或 .csv 文件".into()).into(),
@@ -114,73 +116,82 @@ pub fn load_session(
     session_id: String,
     state: State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, CommandError> {
+    let store = { lock(&state)?.store.clone() };
+    let metadata = store.activate(&session_id)?;
     let mut backend = lock(&state)?;
-    let mut session = backend.store.load(&session_id, true)?;
-    if upgrade_legacy_session(&mut session) {
-        backend.store.save(&session)?;
-    }
-    backend.current = Some(session);
-    Ok(snapshot(&backend))
+    backend.current = Some(metadata);
+    Ok(snapshot(&backend)?)
 }
 
 #[tauri::command]
-pub fn merge_sessions(
+pub async fn merge_sessions(
     session_ids: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, CommandError> {
     if session_ids.len() < 2 {
         return Err(AppError::Validation("至少选择两条历史数据".into()).into());
     }
-    let mut backend = lock(&state)?;
-    let settings = backend
-        .current
-        .as_ref()
-        .map(|session| session.settings.clone())
-        .unwrap_or_default();
-    let mut combined = Vec::new();
-    let mut seen = HashSet::new();
-    let mut duplicate_count = 0;
-    let mut short_stay_count = 0;
-    let mut missing_id_count = 0;
-    let mut file_count = 0;
-    for session_id in &session_ids {
-        let session = backend.store.load(session_id, false)?;
-        file_count += session.file_count;
-        short_stay_count += session.import_stats.short_stay_count;
-        missing_id_count += session.import_stats.missing_id_count;
-        for mut record in session.records {
-            let key = record_key(&record);
-            if !seen.insert(key) {
-                duplicate_count += 1;
-                continue;
-            }
-            record.uid = combined.len() as u64 + 1;
-            combined.push(record);
-        }
-    }
-    let (analyses, stats) = analyze_records(&combined, &settings);
-    let imported = combined.len();
-    let session = StoredSession {
-        schema_version: CURRENT_SCHEMA_VERSION,
-        session_id: format!("combined-{}", Local::now().timestamp_millis()),
-        file_name: format!("合并分析 · {} 个历史会话", session_ids.len()),
-        imported_at: Local::now().to_rfc3339(),
-        file_count,
-        settings,
-        records: combined,
-        analyses,
-        stats,
-        import_stats: crate::model::ImportStats {
-            imported,
-            duplicate_count,
-            short_stay_count,
-            missing_id_count,
-        },
-        source_session_ids: session_ids,
-        is_combined: true,
+    let (store, settings) = {
+        let backend = lock(&state)?;
+        (
+            backend.store.clone(),
+            backend
+                .current
+                .as_ref()
+                .map(|session| session.settings.clone())
+                .unwrap_or_default(),
+        )
     };
-    backend.current = Some(session);
-    Ok(snapshot(&backend))
+    let metadata = tauri::async_runtime::spawn_blocking(move || {
+        let mut combined = Vec::new();
+        let mut seen = HashSet::new();
+        let mut duplicate_count = 0;
+        let mut short_stay_count = 0;
+        let mut missing_id_count = 0;
+        let mut file_count = 0;
+        for session_id in &session_ids {
+            let session = store.load(session_id)?;
+            file_count += session.file_count;
+            short_stay_count += session.import_stats.short_stay_count;
+            missing_id_count += session.import_stats.missing_id_count;
+            for mut record in session.records {
+                let key = record_key(&record);
+                if !seen.insert(key) {
+                    duplicate_count += 1;
+                    continue;
+                }
+                record.uid = combined.len() as u64 + 1;
+                combined.push(record);
+            }
+        }
+        let (analyses, stats) = analyze_records(&combined, &settings);
+        let imported = combined.len();
+        let session = StoredSession {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            session_id: format!("combined-{}", Local::now().timestamp_millis()),
+            file_name: format!("合并分析 · {} 个历史会话", session_ids.len()),
+            imported_at: Local::now().to_rfc3339(),
+            file_count,
+            settings,
+            records: combined,
+            analyses,
+            stats,
+            import_stats: crate::model::ImportStats {
+                imported,
+                duplicate_count,
+                short_stay_count,
+                missing_id_count,
+            },
+            source_session_ids: session_ids,
+            is_combined: true,
+        };
+        store.save(&session)
+    })
+    .await
+    .map_err(task_error)??;
+    let mut backend = lock(&state)?;
+    backend.current = Some(metadata);
+    Ok(snapshot(&backend)?)
 }
 
 #[tauri::command]
@@ -188,127 +199,108 @@ pub fn delete_session(
     session_id: String,
     state: State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, CommandError> {
+    let store = { lock(&state)?.store.clone() };
+    let current = store.delete(&session_id)?;
     let mut backend = lock(&state)?;
-    backend.store.delete(&session_id)?;
-    let active = backend.store.active_id().map(str::to_string);
-    backend.current = if let Some(session_id) = active {
-        let mut session = backend.store.load(&session_id, false)?;
-        if upgrade_legacy_session(&mut session) {
-            backend.store.save(&session)?;
-        }
-        Some(session)
-    } else {
-        None
-    };
-    Ok(snapshot(&backend))
+    backend.current = current;
+    Ok(snapshot(&backend)?)
 }
 
 #[tauri::command]
 pub fn clear_workspace(state: State<'_, AppState>) -> Result<WorkspaceSnapshot, CommandError> {
     let mut backend = lock(&state)?;
     backend.current = None;
-    Ok(snapshot(&backend))
+    Ok(snapshot(&backend)?)
 }
 
 #[tauri::command]
-pub fn reanalyze(
+pub async fn reanalyze(
     settings: AnalysisSettings,
     state: State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, CommandError> {
     validate_settings(&settings)?;
-    let mut backend = lock(&state)?;
-    let should_save = {
-        let session = backend.current.as_mut().ok_or(AppError::NoWorkspace)?;
+    let (store, session_id) = current_store(&state)?;
+    let metadata = tauri::async_runtime::spawn_blocking(move || {
+        let mut session = store.load(&session_id)?;
         let (analyses, stats) = analyze_records(&session.records, &settings);
         session.settings = settings;
         session.analyses = analyses;
         session.stats = stats;
         session.schema_version = CURRENT_SCHEMA_VERSION;
-        !session.is_combined
-    };
-    if should_save {
-        let session = backend
-            .current
-            .as_ref()
-            .cloned()
-            .ok_or(AppError::NoWorkspace)?;
-        backend.store.save(&session)?;
-    }
-    Ok(snapshot(&backend))
+        store.save(&session)
+    })
+    .await
+    .map_err(task_error)??;
+    let mut backend = lock(&state)?;
+    backend.current = Some(metadata);
+    Ok(snapshot(&backend)?)
 }
 
 #[tauri::command]
-pub fn get_person_detail(
+pub async fn query_people(
+    query: PersonQuery,
+    state: State<'_, AppState>,
+) -> Result<PersonPage, CommandError> {
+    let (store, session_id) = current_store(&state)?;
+    let page =
+        tauri::async_runtime::spawn_blocking(move || store.query_people(&session_id, &query))
+            .await
+            .map_err(task_error)??;
+    Ok(page)
+}
+
+#[tauri::command]
+pub async fn get_person_detail(
     person_key: String,
     state: State<'_, AppState>,
 ) -> Result<PersonDetail, CommandError> {
-    let backend = lock(&state)?;
-    let session = backend.current.as_ref().ok_or(AppError::NoWorkspace)?;
-    let analysis = session
-        .analyses
-        .iter()
-        .find(|item| item.summary.person_key == person_key)
-        .ok_or(AppError::Validation("未找到指定人员".into()))?;
-    let evidence_ids: HashSet<u64> = analysis
-        .alerts
-        .iter()
-        .flat_map(|alert| alert.evidence_ids.iter().copied())
-        .collect();
-    let evidence = session
-        .records
-        .iter()
-        .filter(|record| {
-            record.person_key == person_key
-                && within_analysis_time_window(record, &session.settings)
-                && (evidence_ids.is_empty() || evidence_ids.contains(&record.uid))
-        })
-        .map(|record| EvidenceRecord {
-            uid: record.uid,
-            source_file: record.source_file.clone(),
-            source_row: record.source_row,
-            hotel_name: record.hotel_name.clone(),
-            region: record.region.clone(),
-            address: record.address.clone(),
-            room_no: record.room_no.clone(),
-            check_in: format_datetime(record.check_in),
-            check_out: format_datetime(record.check_out),
-            issues: record.issues.clone(),
-        })
-        .collect();
-    Ok(PersonDetail {
-        person: analysis.summary.clone(),
-        alerts: analysis.alerts.clone(),
-        evidence,
-    })
+    let (store, session_id) = current_store(&state)?;
+    let detail =
+        tauri::async_runtime::spawn_blocking(move || store.person_detail(&session_id, &person_key))
+            .await
+            .map_err(task_error)??;
+    Ok(detail)
 }
 
 #[tauri::command]
-pub fn get_imported_records(
+pub async fn get_imported_records(
     state: State<'_, AppState>,
 ) -> Result<Vec<ImportedStayRecord>, CommandError> {
-    let backend = lock(&state)?;
-    let session = backend.current.as_ref().ok_or(AppError::NoWorkspace)?;
-    Ok(session
-        .records
-        .iter()
-        .filter(|record| within_analysis_time_window(record, &session.settings))
-        .map(imported_stay_record)
-        .collect())
+    let (store, session_id) = current_store(&state)?;
+    let records = tauri::async_runtime::spawn_blocking(move || {
+        let settings = store.metadata(&session_id)?.settings;
+        Ok::<_, AppError>(
+            store
+                .records(&session_id)?
+                .into_iter()
+                .filter(|record| within_analysis_time_window(record, &settings))
+                .map(|record| imported_stay_record(&record))
+                .collect(),
+        )
+    })
+    .await
+    .map_err(task_error)??;
+    Ok(records)
 }
 
 #[tauri::command]
-pub fn export_result(
+pub async fn export_result(
     kind: String,
     path: String,
     state: State<'_, AppState>,
 ) -> Result<OperationResult, CommandError> {
-    let backend = lock(&state)?;
-    let session = backend.current.as_ref().ok_or(AppError::NoWorkspace)?;
-    Ok(export_to(&kind, session, &PathBuf::from(path))?)
+    let (store, session_id) = current_store(&state)?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let session = store.load(&session_id)?;
+        export_to(&kind, &session, &PathBuf::from(path))
+    })
+    .await
+    .map_err(task_error)??;
+    Ok(result)
 }
 
 #[tauri::command]
-pub fn set_storage_directory(
+pub async fn set_storage_directory(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<OperationResult, CommandError> {
@@ -316,26 +308,37 @@ pub fn set_storage_directory(
     if !destination.exists() {
         return Err(AppError::Validation("所选目录不存在".into()).into());
     }
-    let mut backend = lock(&state)?;
-    backend.store.move_to(destination.clone())?;
-    let preference = StoragePreference {
-        storage_root: destination.to_string_lossy().into_owned(),
+    let (store, preference_path) = {
+        let backend = lock(&state)?;
+        (backend.store.clone(), backend.preference_path.clone())
     };
-    fs::write(
-        &backend.preference_path,
-        serde_json::to_vec_pretty(&preference).map_err(AppError::from)?,
-    )
-    .map_err(|error| AppError::Storage(error.to_string()))?;
+    let result_path = destination.clone();
+    let next_store = tauri::async_runtime::spawn_blocking(move || {
+        let next_store = store.move_to(destination.clone())?;
+        let preference = StoragePreference {
+            storage_root: destination.to_string_lossy().into_owned(),
+        };
+        fs::write(
+            preference_path,
+            serde_json::to_vec_pretty(&preference).map_err(AppError::from)?,
+        )
+        .map_err(|error| AppError::Storage(error.to_string()))?;
+        Ok::<_, AppError>(next_store)
+    })
+    .await
+    .map_err(task_error)??;
+    let mut backend = lock(&state)?;
+    backend.store = next_store;
     Ok(OperationResult {
-        message: format!("历史数据存放目录已更改为 {}", destination.display()),
-        path: Some(destination.to_string_lossy().into_owned()),
+        message: format!("历史数据存放目录已更改为 {}", result_path.display()),
+        path: Some(result_path.to_string_lossy().into_owned()),
     })
 }
 
-fn snapshot(backend: &BackendState) -> WorkspaceSnapshot {
-    let sessions = backend.store.list();
+fn snapshot(backend: &BackendState) -> Result<WorkspaceSnapshot, AppError> {
+    let sessions = backend.store.list()?;
     if let Some(session) = &backend.current {
-        return WorkspaceSnapshot {
+        return Ok(WorkspaceSnapshot {
             mode: if session.is_combined {
                 "combined".into()
             } else {
@@ -351,11 +354,6 @@ fn snapshot(backend: &BackendState) -> WorkspaceSnapshot {
                 )
             },
             stats: session.stats.clone(),
-            people: session
-                .analyses
-                .iter()
-                .map(|item| item.summary.clone())
-                .collect(),
             sessions,
             settings: session.settings.clone(),
             import_stats: session.import_stats.clone(),
@@ -365,20 +363,29 @@ fn snapshot(backend: &BackendState) -> WorkspaceSnapshot {
                 vec![session.session_id.clone()]
             },
             generated_at: Local::now().to_rfc3339(),
-        };
+        });
     }
-    WorkspaceSnapshot {
+    Ok(WorkspaceSnapshot {
         mode: "empty".into(),
         title: "尚未载入数据".into(),
         subtitle: "选择 Excel、CSV 或历史会话开始分析".into(),
         stats: Default::default(),
-        people: vec![],
         sessions,
         settings: Default::default(),
         import_stats: Default::default(),
         source_session_ids: vec![],
         generated_at: Local::now().to_rfc3339(),
-    }
+    })
+}
+
+fn current_store(state: &State<'_, AppState>) -> Result<(SessionStore, String), CommandError> {
+    let backend = lock(state)?;
+    let session_id = backend
+        .current
+        .as_ref()
+        .map(|session| session.session_id.clone())
+        .ok_or(AppError::NoWorkspace)?;
+    Ok((backend.store.clone(), session_id))
 }
 
 fn validate_settings(settings: &AnalysisSettings) -> Result<(), AppError> {
@@ -402,17 +409,6 @@ fn validate_settings(settings: &AnalysisSettings) -> Result<(), AppError> {
         return Err(AppError::Validation("入住开始时间不能晚于结束时间".into()));
     }
     Ok(())
-}
-
-fn upgrade_legacy_session(session: &mut StoredSession) -> bool {
-    if session.schema_version >= CURRENT_SCHEMA_VERSION {
-        return false;
-    }
-    let (analyses, stats) = analyze_records(&session.records, &session.settings);
-    session.analyses = analyses;
-    session.stats = stats;
-    session.schema_version = CURRENT_SCHEMA_VERSION;
-    true
 }
 
 fn imported_stay_record(record: &crate::model::Record) -> ImportedStayRecord {
@@ -442,6 +438,13 @@ fn lock<'a>(
         code: "state_poisoned",
         message: "本地状态不可用，请重启应用".into(),
     })
+}
+
+fn task_error(error: impl std::fmt::Display) -> CommandError {
+    CommandError {
+        code: "task_error",
+        message: error.to_string(),
+    }
 }
 
 fn record_key(record: &crate::model::Record) -> String {
@@ -479,42 +482,25 @@ fn read_storage_preference(path: &std::path::Path) -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
-#[derive(Serialize)]
-#[allow(dead_code)]
-struct ProgressEvent<'a> {
-    operation_id: &'a str,
-    completed: usize,
-    total: usize,
-    file_name: &'a str,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn legacy_sessions_are_reanalyzed_only_once() {
-        let mut session = StoredSession {
-            schema_version: 1,
-            session_id: "legacy".into(),
-            file_name: "legacy.xlsx".into(),
-            imported_at: "2026-07-22T00:00:00+08:00".into(),
-            file_count: 1,
-            settings: AnalysisSettings::default(),
-            records: vec![],
-            analyses: vec![],
-            stats: crate::model::AnalysisStats {
-                people: 99,
-                ..Default::default()
-            },
-            import_stats: Default::default(),
-            source_session_ids: vec![],
-            is_combined: false,
+    fn validates_analysis_thresholds_and_time_order() {
+        let mut settings = AnalysisSettings {
+            week_threshold: 0,
+            ..Default::default()
         };
+        assert!(validate_settings(&settings).is_err());
 
-        assert!(upgrade_legacy_session(&mut session));
-        assert_eq!(session.schema_version, CURRENT_SCHEMA_VERSION);
-        assert_eq!(session.stats.people, 0);
-        assert!(!upgrade_legacy_session(&mut session));
+        settings.week_threshold = 3;
+        settings.frequency_start = chrono::NaiveDate::from_ymd_opt(2026, 7, 2)
+            .unwrap()
+            .and_hms_opt(0, 0, 0);
+        settings.frequency_end = chrono::NaiveDate::from_ymd_opt(2026, 7, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0);
+        assert!(validate_settings(&settings).is_err());
     }
 }

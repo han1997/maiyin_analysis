@@ -3,6 +3,7 @@ use crate::model::{
     Record,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime};
+use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
 
 pub fn analyze_records(
@@ -15,8 +16,8 @@ pub fn analyze_records(
     }
 
     let mut analyses: Vec<PersonAnalysis> = grouped
-        .into_values()
-        .filter_map(|group| analyze_person(group, settings))
+        .into_par_iter()
+        .filter_map(|(_, group)| analyze_person(group, settings))
         .collect();
     analyses.sort_by(|left, right| {
         right
@@ -25,6 +26,7 @@ pub fn analyze_records(
             .cmp(&left.summary.score)
             .then_with(|| right.summary.total_records.cmp(&left.summary.total_records))
             .then_with(|| left.summary.name.cmp(&right.summary.name))
+            .then_with(|| left.summary.person_key.cmp(&right.summary.person_key))
     });
 
     let scoped: Vec<&Record> = records

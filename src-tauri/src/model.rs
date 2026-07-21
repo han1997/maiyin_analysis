@@ -1,7 +1,7 @@
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -199,12 +199,43 @@ pub struct WorkspaceSnapshot {
     pub title: String,
     pub subtitle: String,
     pub stats: AnalysisStats,
-    pub people: Vec<PersonSummary>,
     pub sessions: Vec<SessionSummary>,
     pub settings: AnalysisSettings,
     pub import_stats: ImportStats,
     pub source_session_ids: Vec<String>,
     pub generated_at: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PersonQuery {
+    pub search: String,
+    pub hotel_search: String,
+    pub hotel_province: String,
+    pub hotel_city: String,
+    pub hotel_county: String,
+    pub household_province: String,
+    pub household_city: String,
+    pub household_county: String,
+    pub exclude_household_province: String,
+    pub exclude_household_city: String,
+    pub exclude_household_county: String,
+    pub min_age: Option<usize>,
+    pub max_age: Option<usize>,
+    pub gender: String,
+    pub level: String,
+    pub alert_state: String,
+    pub page: usize,
+    pub page_size: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonPage {
+    pub items: Vec<PersonSummary>,
+    pub total: usize,
+    pub page: usize,
+    pub page_size: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

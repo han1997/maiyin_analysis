@@ -439,6 +439,10 @@ tbody tr:last-child td { border-bottom: 0; }
 .no-results { display: grid; place-items: center; align-content: center; min-height: 280px; color: var(--ink-faint); }
 .no-results strong { margin-top: 10px; color: var(--ink-soft); font-size: 12px; }
 .no-results span { margin-top: 5px; font-size: 10px; }
+.table-skeleton { position: absolute; inset: 39px 0 0; display: grid; align-content: start; background: var(--surface); }
+.table-skeleton span { height: 51px; margin: 0 18px; border-bottom: 1px solid var(--line-subtle); background: linear-gradient(90deg, transparent 0%, var(--surface-muted) 18%, transparent 36%); background-size: 220% 100%; animation: table-pulse 1.2s ease-in-out infinite; }
+.table-skeleton span:nth-child(2n) { animation-delay: 100ms; }
+@keyframes table-pulse { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 .table-footer { justify-content: space-between; min-height: 43px; padding: 6px 10px; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 9px; }
 .pagination { gap: 8px; }
 .pagination .icon-button { width: 28px; height: 28px; }

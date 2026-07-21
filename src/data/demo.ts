@@ -8,7 +8,7 @@ import type {
 } from "../domain/types";
 import { DEFAULT_SETTINGS } from "../domain/types";
 
-const people: PersonSummary[] = [
+export const demoPeople: PersonSummary[] = [
   {
     personKey: "341024198809128135",
     name: "周明远",
@@ -287,7 +287,6 @@ export const demoSnapshot: WorkspaceSnapshot = {
     high: 12,
     issues: 23,
   },
-  people,
   sessions,
   settings: { ...DEFAULT_SETTINGS },
   importStats: {
@@ -301,12 +300,12 @@ export const demoSnapshot: WorkspaceSnapshot = {
 };
 
 export function getDemoDetail(personKey: string): PersonDetail {
-  const person = people.find((item) => item.personKey === personKey) ?? people[0];
+  const person = demoPeople.find((item) => item.personKey === personKey) ?? demoPeople[0];
   if (!person) {
     throw new Error("演示数据中没有可用人员");
   }
 
-  if (person.personKey === people[0]?.personKey) {
+  if (person.personKey === demoPeople[0]?.personKey) {
     return { person, alerts, evidence };
   }
 
