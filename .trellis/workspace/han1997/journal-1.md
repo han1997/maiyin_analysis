@@ -105,3 +105,36 @@ Added BIFF8 fallback parsing for legacy XLS files with malformed shared-string/r
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Sync upstream scoring rules and analysis UI
+
+**Date**: 2026-07-22
+**Task**: Sync upstream scoring rules and analysis UI
+**Branch**: `main`
+
+### Summary
+
+Ported upstream scoring, time-window analysis, frequency thresholds, explicit filters, fuzzy hotel search, and on-demand imported-record UI to React and Tauri.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f46e12c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
