@@ -2,18 +2,6 @@ export type RiskLevel = "高风险" | "中风险" | "关注" | "正常";
 export type Severity = "高" | "中" | "低";
 
 export interface AnalysisSettings {
-  province: string;
-  city: string;
-  county: string;
-  householdProvince: string;
-  householdCity: string;
-  householdCounty: string;
-  excludeHouseholdProvince: string;
-  excludeHouseholdCity: string;
-  excludeHouseholdCounty: string;
-  minAge: number | null;
-  maxAge: number | null;
-  gender: "" | "男" | "女";
   frequencyStart: string | null;
   frequencyEnd: string | null;
   frequencyThreshold: number;
@@ -58,6 +46,14 @@ export interface PersonSummary {
   alertCount: number;
   alertTitles: string[];
   hotelNames?: string[];
+  hotelRegions?: HotelRegion[];
+}
+
+export interface HotelRegion {
+  province: string;
+  city: string;
+  county: string;
+  region: string;
 }
 
 export interface EvidenceRecord {
@@ -132,6 +128,18 @@ export interface WorkspaceSnapshot {
 export interface PersonQuery {
   search: string;
   hotelSearch?: string;
+  hotelProvince?: string;
+  hotelCity?: string;
+  hotelCounty?: string;
+  householdProvince?: string;
+  householdCity?: string;
+  householdCounty?: string;
+  excludeHouseholdProvince?: string;
+  excludeHouseholdCity?: string;
+  excludeHouseholdCounty?: string;
+  minAge?: number | null;
+  maxAge?: number | null;
+  gender?: "" | "男" | "女";
   level: "全部等级" | RiskLevel;
   alertState: "全部人员" | "仅预警人员" | "未预警人员";
   page: number;
@@ -153,18 +161,6 @@ export interface OperationResult {
 }
 
 export const DEFAULT_SETTINGS: AnalysisSettings = {
-  province: "",
-  city: "",
-  county: "",
-  householdProvince: "",
-  householdCity: "",
-  householdCounty: "",
-  excludeHouseholdProvince: "",
-  excludeHouseholdCity: "",
-  excludeHouseholdCounty: "",
-  minAge: null,
-  maxAge: null,
-  gender: "",
   frequencyStart: null,
   frequencyEnd: null,
   frequencyThreshold: 3,

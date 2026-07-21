@@ -23,6 +23,8 @@ The analysis workspace is a dense desktop tool. Keep the primary path visible an
 
 - Keep person search and the primary risk-level filter directly visible above the results table.
 - Put hotel search, alert-state filtering, and other secondary criteria in a labelled `details` disclosure or equivalent accessible control.
+- Treat hotel jurisdiction, household include/exclude, age, and gender as result filters. They belong to `PersonQuery`, not `AnalysisSettings`, and must never trigger risk reanalysis.
+- Multiple hotel-name terms use a familiar separated text input; explain the AND behavior beside the field instead of introducing a custom selector.
 - Show a count on the secondary-filter trigger when non-default criteria are active.
 - Keep analysis settings editable in `SettingsPanel`; the sidebar may show a read-only summary and a single entry point.
 - Interactive controls require visible focus, hover, active, disabled, and loading feedback.
@@ -34,6 +36,7 @@ The analysis workspace is a dense desktop tool. Keep the primary path visible an
 - Run `npm test`, `npm run lint`, and `npm run build` for every frontend interaction change.
 - Tests for progressive disclosure must assert that the trigger starts closed, opens on activation, and exposes the expected controls or actions.
 - Existing workspace smoke tests must continue to assert that the table and person-detail entry points render.
+- Result-filter tests must cover multi-hotel AND matching, same-stay jurisdiction matching, age validation, and the absence of result filters from `SettingsPanel`.
 
 ---
 

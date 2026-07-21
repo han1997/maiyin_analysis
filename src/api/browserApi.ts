@@ -107,7 +107,7 @@ export const browserApi: AppApi = {
     await pause(640);
     const next = cloneSnapshot(demoSnapshot);
     next.settings = structuredClone(settings);
-    next.subtitle = "已按当前筛选口径重新计算（浏览器演示）";
+    next.subtitle = "已按当前分析参数重新计算（浏览器演示）";
     next.generatedAt = new Date().toISOString();
     return next;
   },

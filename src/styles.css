@@ -361,9 +361,26 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
   background: var(--surface);
   box-shadow: var(--shadow-float);
 }
-.filter-popover { left: 0; display: grid; width: 270px; gap: 12px; }
+.filter-popover {
+  left: 0;
+  display: grid;
+  width: min(620px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 170px));
+  gap: 0;
+  overflow-y: auto;
+}
+.filter-group { display: grid; gap: 10px; padding: 2px 0 14px; }
+.filter-group + .filter-group { padding-top: 14px; border-top: 1px solid var(--line); }
+.filter-group-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
+.filter-group-heading strong { color: var(--ink); font-size: 10px; }
+.filter-group-heading span { color: var(--ink-faint); font-size: 9px; text-align: right; }
+.filter-field-grid { display: grid; gap: 10px; }
+.filter-field-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.filter-field-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.filter-subgroup { display: grid; gap: 8px; }
+.filter-subgroup > span { color: var(--ink-soft); font-size: 9px; font-weight: 700; }
 .filter-count { display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 5px; background: var(--accent); color: var(--surface); font-size: 9px; font-variant-numeric: tabular-nums; }
-.popover-actions { display: flex; justify-content: flex-end; padding-top: 2px; }
+.popover-actions { display: flex; justify-content: flex-end; padding-top: 12px; border-top: 1px solid var(--line); }
 .export-popover { right: 0; display: grid; width: 210px; padding: 6px; }
 .export-popover button { display: flex; align-items: center; justify-content: space-between; min-height: 36px; padding: 0 9px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink); cursor: pointer; font-size: 10px; text-align: left; }
 .export-popover button:hover:not(:disabled) { background: var(--surface-hover); }
@@ -609,6 +626,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .toolbar-spacer { display: none; }
   .detail-inspector { top: calc(var(--topbar-height) + var(--demo-height)); width: 100vw; }
   .field-grid.three, .field-grid.four, .field-grid.two { grid-template-columns: 1fr 1fr; }
+  .filter-field-grid.three, .filter-field-grid.four { grid-template-columns: 1fr 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

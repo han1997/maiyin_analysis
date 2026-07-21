@@ -1,10 +1,10 @@
-use crate::analysis::{analyze_records, within_analysis_scope, within_analysis_time_window};
+use crate::analysis::{analyze_records, within_analysis_time_window};
 use crate::error::{AppError, CommandError};
 use crate::exporter::{export_to, OperationResult};
 use crate::importer;
 use crate::model::{
     format_datetime, AnalysisSettings, EvidenceRecord, ImportedStayRecord, PersonDetail,
-    StoredSession, WorkspaceSnapshot,
+    StoredSession, WorkspaceSnapshot, CURRENT_SCHEMA_VERSION,
 };
 use crate::storage::SessionStore;
 use chrono::Local;
@@ -67,7 +67,7 @@ pub async fn import_paths(
         .unwrap_or_default();
     let (analyses, stats) = analyze_records(&imported.records, &settings);
     let session = StoredSession {
-        schema_version: 1,
+        schema_version: CURRENT_SCHEMA_VERSION,
         session_id: format!(
             "{}-{}",
             Local::now().timestamp_millis(),
@@ -115,7 +115,10 @@ pub fn load_session(
     state: State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, CommandError> {
     let mut backend = lock(&state)?;
-    let session = backend.store.load(&session_id, true)?;
+    let mut session = backend.store.load(&session_id, true)?;
+    if upgrade_legacy_session(&mut session) {
+        backend.store.save(&session)?;
+    }
     backend.current = Some(session);
     Ok(snapshot(&backend))
 }
@@ -158,7 +161,7 @@ pub fn merge_sessions(
     let (analyses, stats) = analyze_records(&combined, &settings);
     let imported = combined.len();
     let session = StoredSession {
-        schema_version: 1,
+        schema_version: CURRENT_SCHEMA_VERSION,
         session_id: format!("combined-{}", Local::now().timestamp_millis()),
         file_name: format!("合并分析 · {} 个历史会话", session_ids.len()),
         imported_at: Local::now().to_rfc3339(),
@@ -188,7 +191,15 @@ pub fn delete_session(
     let mut backend = lock(&state)?;
     backend.store.delete(&session_id)?;
     let active = backend.store.active_id().map(str::to_string);
-    backend.current = active.and_then(|session_id| backend.store.load(&session_id, false).ok());
+    backend.current = if let Some(session_id) = active {
+        let mut session = backend.store.load(&session_id, false)?;
+        if upgrade_legacy_session(&mut session) {
+            backend.store.save(&session)?;
+        }
+        Some(session)
+    } else {
+        None
+    };
     Ok(snapshot(&backend))
 }
 
@@ -212,6 +223,7 @@ pub fn reanalyze(
         session.settings = settings;
         session.analyses = analyses;
         session.stats = stats;
+        session.schema_version = CURRENT_SCHEMA_VERSION;
         !session.is_combined
     };
     if should_save {
@@ -247,7 +259,6 @@ pub fn get_person_detail(
         .iter()
         .filter(|record| {
             record.person_key == person_key
-                && within_analysis_scope(record, &session.settings)
                 && within_analysis_time_window(record, &session.settings)
                 && (evidence_ids.is_empty() || evidence_ids.contains(&record.uid))
         })
@@ -280,10 +291,7 @@ pub fn get_imported_records(
     Ok(session
         .records
         .iter()
-        .filter(|record| {
-            within_analysis_scope(record, &session.settings)
-                && within_analysis_time_window(record, &session.settings)
-        })
+        .filter(|record| within_analysis_time_window(record, &session.settings))
         .map(imported_stay_record)
         .collect())
 }
@@ -393,14 +401,18 @@ fn validate_settings(settings: &AnalysisSettings) -> Result<(), AppError> {
     {
         return Err(AppError::Validation("入住开始时间不能晚于结束时间".into()));
     }
-    if settings
-        .min_age
-        .zip(settings.max_age)
-        .is_some_and(|(minimum, maximum)| minimum > maximum)
-    {
-        return Err(AppError::Validation("最小年龄不能大于最大年龄".into()));
-    }
     Ok(())
+}
+
+fn upgrade_legacy_session(session: &mut StoredSession) -> bool {
+    if session.schema_version >= CURRENT_SCHEMA_VERSION {
+        return false;
+    }
+    let (analyses, stats) = analyze_records(&session.records, &session.settings);
+    session.analyses = analyses;
+    session.stats = stats;
+    session.schema_version = CURRENT_SCHEMA_VERSION;
+    true
 }
 
 fn imported_stay_record(record: &crate::model::Record) -> ImportedStayRecord {
@@ -474,4 +486,35 @@ struct ProgressEvent<'a> {
     completed: usize,
     total: usize,
     file_name: &'a str,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_sessions_are_reanalyzed_only_once() {
+        let mut session = StoredSession {
+            schema_version: 1,
+            session_id: "legacy".into(),
+            file_name: "legacy.xlsx".into(),
+            imported_at: "2026-07-22T00:00:00+08:00".into(),
+            file_count: 1,
+            settings: AnalysisSettings::default(),
+            records: vec![],
+            analyses: vec![],
+            stats: crate::model::AnalysisStats {
+                people: 99,
+                ..Default::default()
+            },
+            import_stats: Default::default(),
+            source_session_ids: vec![],
+            is_combined: false,
+        };
+
+        assert!(upgrade_legacy_session(&mut session));
+        assert_eq!(session.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(session.stats.people, 0);
+        assert!(!upgrade_legacy_session(&mut session));
+    }
 }

@@ -1,4 +1,4 @@
-use crate::analysis::{within_analysis_scope, within_analysis_time_window};
+use crate::analysis::within_analysis_time_window;
 use crate::error::AppError;
 use crate::model::StoredSession;
 use rust_xlsxwriter::{Format, FormatAlign, Workbook};
@@ -112,10 +112,11 @@ fn export_raw_csv(path: &Path, session: &StoredSession) -> Result<(), AppError> 
             "数据问题",
         ])
         .map_err(|error| AppError::Export(error.to_string()))?;
-    for record in session.records.iter().filter(|record| {
-        within_analysis_scope(record, &session.settings)
-            && within_analysis_time_window(record, &session.settings)
-    }) {
+    for record in session
+        .records
+        .iter()
+        .filter(|record| within_analysis_time_window(record, &session.settings))
+    {
         writer
             .write_record([
                 safe(&record.source_file),

@@ -1,5 +1,6 @@
 use crate::model::{
-    AlertSummary, AnalysisSettings, AnalysisStats, PersonAnalysis, PersonSummary, Record,
+    AlertSummary, AnalysisSettings, AnalysisStats, HotelRegion, PersonAnalysis, PersonSummary,
+    Record,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 use std::collections::{BTreeMap, HashMap};
@@ -28,9 +29,7 @@ pub fn analyze_records(
 
     let scoped: Vec<&Record> = records
         .iter()
-        .filter(|record| {
-            within_analysis_scope(record, settings) && within_analysis_time_window(record, settings)
-        })
+        .filter(|record| within_analysis_time_window(record, settings))
         .collect();
     let stats = AnalysisStats {
         records: analyses.iter().map(|item| item.summary.total_records).sum(),
@@ -55,9 +54,7 @@ fn analyze_person(
     mut records: Vec<&Record>,
     settings: &AnalysisSettings,
 ) -> Option<PersonAnalysis> {
-    records.retain(|record| {
-        within_analysis_scope(record, settings) && within_analysis_time_window(record, settings)
-    });
+    records.retain(|record| within_analysis_time_window(record, settings));
     records.sort_by_key(|record| record.check_in.unwrap_or(NaiveDateTime::MIN));
     let first = *records.first()?;
 
@@ -210,6 +207,25 @@ fn analyze_person(
             }
             names
         }),
+        hotel_regions: records.iter().fold(Vec::new(), |mut regions, record| {
+            let region = HotelRegion {
+                province: record.province.clone(),
+                city: record.city.clone(),
+                county: record.county.clone(),
+                region: record.region.clone(),
+            };
+            if region.province.trim().is_empty()
+                && region.city.trim().is_empty()
+                && region.county.trim().is_empty()
+                && region.region.trim().is_empty()
+            {
+                return regions;
+            }
+            if !regions.contains(&region) {
+                regions.push(region);
+            }
+            regions
+        }),
     };
     Some(PersonAnalysis { summary, alerts })
 }
@@ -256,85 +272,6 @@ fn overlapping_stay_pairs<'a>(
         }
     }
     pairs
-}
-
-pub fn within_analysis_scope(record: &Record, settings: &AnalysisSettings) -> bool {
-    let jurisdiction = [
-        (
-            &settings.province,
-            [
-                &record.province,
-                &record.region,
-                &record.hotel_name,
-                &record.address,
-            ],
-        ),
-        (
-            &settings.city,
-            [
-                &record.city,
-                &record.region,
-                &record.hotel_name,
-                &record.address,
-            ],
-        ),
-        (
-            &settings.county,
-            [
-                &record.county,
-                &record.region,
-                &record.hotel_name,
-                &record.address,
-            ],
-        ),
-    ];
-    if jurisdiction.iter().any(|(needle, fields)| {
-        !needle.trim().is_empty() && !fields.iter().any(|value| contains(value, needle))
-    }) {
-        return false;
-    }
-
-    let include_household = [
-        (&settings.household_province, &record.household_province),
-        (&settings.household_city, &record.household_city),
-        (&settings.household_county, &record.household_county),
-    ];
-    if include_household
-        .iter()
-        .any(|(needle, value)| !needle.trim().is_empty() && !contains(value, needle))
-    {
-        return false;
-    }
-    let exclude_household = [
-        (
-            &settings.exclude_household_province,
-            &record.household_province,
-        ),
-        (&settings.exclude_household_city, &record.household_city),
-        (&settings.exclude_household_county, &record.household_county),
-    ];
-    if exclude_household
-        .iter()
-        .any(|(needle, value)| !needle.trim().is_empty() && contains(value, needle))
-    {
-        return false;
-    }
-    if settings
-        .min_age
-        .is_some_and(|minimum| record.age.is_none_or(|age| age < minimum))
-    {
-        return false;
-    }
-    if settings
-        .max_age
-        .is_some_and(|maximum| record.age.is_none_or(|age| age > maximum))
-    {
-        return false;
-    }
-    if !settings.gender.is_empty() && record.gender != settings.gender {
-        return false;
-    }
-    true
 }
 
 pub fn within_analysis_time_window(record: &Record, settings: &AnalysisSettings) -> bool {
@@ -424,9 +361,6 @@ fn level_from_score(score: u32) -> &'static str {
     }
 }
 
-fn contains(value: &str, needle: &str) -> bool {
-    compact(value).contains(&compact(needle))
-}
 fn compact(value: &str) -> String {
     value.split_whitespace().collect::<String>().to_lowercase()
 }
@@ -537,5 +471,22 @@ mod tests {
         assert_eq!(analyses[0].summary.total_records, 2);
         assert_eq!(stats.records, 2);
         assert_eq!(analyses[0].alerts[0].evidence_ids, vec![2, 3]);
+    }
+
+    #[test]
+    fn summary_collects_unique_hotel_regions_and_defaults_missing_regions() {
+        let first = record(1, "301", "2026-05-01 09:30", "2026-05-01 13:00");
+        let mut second = record(2, "302", "2026-05-02 09:30", "2026-05-02 13:00");
+        second.province = "浙江省".into();
+        second.city = "杭州市".into();
+        second.county = "西湖区".into();
+        second.region = "浙江省杭州市西湖区".into();
+        let analyses = analyze_records(&[first, second], &AnalysisSettings::default()).0;
+        assert_eq!(analyses[0].summary.hotel_regions.len(), 2);
+
+        let mut serialized = serde_json::to_value(&analyses[0].summary).unwrap();
+        serialized.as_object_mut().unwrap().remove("hotelRegions");
+        let restored: PersonSummary = serde_json::from_value(serialized).unwrap();
+        assert!(restored.hotel_regions.is_empty());
     }
 }

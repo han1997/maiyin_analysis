@@ -13,7 +13,7 @@ import type {
   WorkspaceSnapshot,
 } from "./domain/types";
 import { filterPeople } from "./lib/filter";
-import { formatDateTime, formatInteger, joinScope, maskIdentity, maskPhone } from "./lib/format";
+import { formatDateTime, formatInteger, maskIdentity, maskPhone } from "./lib/format";
 
 type BusyAction = "boot" | "import" | "reanalyze" | "session" | "export" | "delete" | null;
 
@@ -32,6 +32,18 @@ const exportActions: Array<{ kind: ExportKind; label: string }> = [
 const initialQuery: PersonQuery = {
   search: "",
   hotelSearch: "",
+  hotelProvince: "",
+  hotelCity: "",
+  hotelCounty: "",
+  householdProvince: "",
+  householdCity: "",
+  householdCounty: "",
+  excludeHouseholdProvince: "",
+  excludeHouseholdCity: "",
+  excludeHouseholdCounty: "",
+  minAge: null,
+  maxAge: null,
+  gender: "",
   level: "全部等级",
   alertState: "全部人员",
   page: 1,
@@ -159,6 +171,14 @@ function App() {
     setSettingsOpen(false);
     const completed = await runSnapshotAction("reanalyze", () => appApi.reanalyze(draftSettings));
     if (completed) setToast({ tone: "success", message: "已按新的分析口径重新计算。" });
+  }
+
+  function applyResultFilters() {
+    if (filterDraft.minAge != null && filterDraft.maxAge != null && filterDraft.minAge > filterDraft.maxAge) {
+      setToast({ tone: "error", message: "最小年龄不能大于最大年龄。" });
+      return;
+    }
+    setQuery({ ...filterDraft, page: 1 });
   }
 
   async function exportResult(kind: ExportKind) {
@@ -321,8 +341,7 @@ function App() {
             <div><span className="step-number">03</span><h2>当前分析口径</h2></div>
           </div>
           <dl className="scope-summary">
-            <div><dt>入住辖区</dt><dd>{joinScope([snapshot.settings.province, snapshot.settings.city, snapshot.settings.county])}</dd></div>
-            <div><dt>户籍条件</dt><dd>{snapshot.settings.excludeHouseholdCounty ? `排除 ${snapshot.settings.excludeHouseholdCounty}` : "不限"}</dd></div>
+            <div><dt>入住时间</dt><dd>{analysisTimeScopeLabel(snapshot.settings)}</dd></div>
             <div><dt>频次规则</dt><dd>{frequencyScopeLabel(snapshot.settings)}</dd></div>
           </dl>
           <button className="button button-secondary full-width" type="button" onClick={openSettings}>
@@ -386,12 +405,41 @@ function App() {
               <select aria-label="风险等级" value={filterDraft.level} onChange={(event) => setFilterDraft((current) => ({ ...current, level: event.target.value as PersonQuery["level"] }))}>
                 {riskLevels.map((level) => <option key={level}>{level}</option>)}
               </select>
-              <button className="button button-primary compact" type="button" onClick={() => setQuery({ ...filterDraft, page: 1 })}>应用筛选</button>
+              <button className="button button-primary compact" type="button" onClick={applyResultFilters}>应用筛选</button>
               <details className="toolbar-menu filter-menu">
                 <summary className="button button-quiet compact"><Icon name="filter" size={16} /> 更多筛选{activeExtraFilterCount(filterDraft) > 0 && <span className="filter-count">{activeExtraFilterCount(filterDraft)}</span>}</summary>
                 <div className="toolbar-popover filter-popover">
-                  <label className="field"><span>旅馆名称</span><input placeholder="支持模糊搜索" value={filterDraft.hotelSearch} onChange={(event) => setFilterDraft((current) => ({ ...current, hotelSearch: event.target.value }))} /></label>
-                  <label className="field"><span>预警状态</span><select value={filterDraft.alertState} onChange={(event) => setFilterDraft((current) => ({ ...current, alertState: event.target.value as PersonQuery["alertState"] }))}><option>全部人员</option><option>仅预警人员</option><option>未预警人员</option></select></label>
+                  <section className="filter-group" aria-labelledby="hotel-filter-title">
+                    <div className="filter-group-heading"><strong id="hotel-filter-title">入住旅馆</strong><span>多个名称用逗号分隔，需全部命中</span></div>
+                    <label className="field filter-wide-field"><span>旅馆名称</span><input placeholder="例如：旅馆 A，旅馆 B" value={filterDraft.hotelSearch} onChange={(event) => setFilterDraft((current) => ({ ...current, hotelSearch: event.target.value }))} /></label>
+                    <div className="filter-field-grid three">
+                      <Field label="旅馆省份" value={filterDraft.hotelProvince ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, hotelProvince: value }))} />
+                      <Field label="旅馆城市" value={filterDraft.hotelCity ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, hotelCity: value }))} />
+                      <Field label="旅馆县区" value={filterDraft.hotelCounty ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, hotelCounty: value }))} />
+                    </div>
+                  </section>
+                  <section className="filter-group" aria-labelledby="household-filter-title">
+                    <div className="filter-group-heading"><strong id="household-filter-title">人员户籍地</strong><span>包含条件与排除条件分别组合匹配</span></div>
+                    <div className="filter-subgroup"><span>包含户籍地</span><div className="filter-field-grid three">
+                      <Field label="省份" value={filterDraft.householdProvince ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, householdProvince: value }))} />
+                      <Field label="城市" value={filterDraft.householdCity ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, householdCity: value }))} />
+                      <Field label="县区" value={filterDraft.householdCounty ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, householdCounty: value }))} />
+                    </div></div>
+                    <div className="filter-subgroup"><span>排除户籍地</span><div className="filter-field-grid three">
+                      <Field label="省份" value={filterDraft.excludeHouseholdProvince ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, excludeHouseholdProvince: value }))} />
+                      <Field label="城市" value={filterDraft.excludeHouseholdCity ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, excludeHouseholdCity: value }))} />
+                      <Field label="县区" value={filterDraft.excludeHouseholdCounty ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, excludeHouseholdCounty: value }))} />
+                    </div></div>
+                  </section>
+                  <section className="filter-group" aria-labelledby="person-filter-title">
+                    <div className="filter-group-heading"><strong id="person-filter-title">人员条件</strong><span>仅筛选结果，不改变风险评分</span></div>
+                    <div className="filter-field-grid four">
+                      <NumberField label="最小年龄" value={filterDraft.minAge ?? null} onChange={(value) => setFilterDraft((current) => ({ ...current, minAge: value }))} />
+                      <NumberField label="最大年龄" value={filterDraft.maxAge ?? null} onChange={(value) => setFilterDraft((current) => ({ ...current, maxAge: value }))} />
+                      <label className="field"><span>性别</span><select value={filterDraft.gender ?? ""} onChange={(event) => setFilterDraft((current) => ({ ...current, gender: event.target.value as PersonQuery["gender"] }))}><option value="">不限</option><option>男</option><option>女</option></select></label>
+                      <label className="field"><span>预警状态</span><select value={filterDraft.alertState} onChange={(event) => setFilterDraft((current) => ({ ...current, alertState: event.target.value as PersonQuery["alertState"] }))}><option>全部人员</option><option>仅预警人员</option><option>未预警人员</option></select></label>
+                    </div>
+                  </section>
                   <div className="popover-actions"><button className="text-button" type="button" onClick={() => { setFilterDraft(initialQuery); setQuery(initialQuery); }}>清除全部筛选</button></div>
                 </div>
               </details>
@@ -556,12 +604,8 @@ function SettingsPanel({ settings, onChange, onClose, onApply, busy }: { setting
   return (
     <div className="panel-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <header><div><span className="detail-kicker">当前会话</span><h2 id="settings-title">分析参数</h2><p>应用后将基于有效明细重新计算统计和风险。</p></div><button className="icon-button" type="button" aria-label="关闭参数" onClick={onClose}><Icon name="close" /></button></header>
+        <header><div><span className="detail-kicker">当前会话</span><h2 id="settings-title">分析参数</h2><p>时间范围和频次规则会重新计算统计与风险；人员筛选在结果列表中应用。</p></div><button className="icon-button" type="button" aria-label="关闭参数" onClick={onClose}><Icon name="close" /></button></header>
         <div className="settings-content">
-          <fieldset><legend>入住旅馆辖区</legend><div className="field-grid three"><Field label="省" value={settings.province} onChange={(value) => update("province", value)} placeholder="全部省份"/><Field label="市" value={settings.city} onChange={(value) => update("city", value)} placeholder="全部城市"/><Field label="县区" value={settings.county} onChange={(value) => update("county", value)} placeholder="全部县区"/></div></fieldset>
-          <fieldset><legend>入住人户籍地</legend><div className="field-grid three"><Field label="省" value={settings.householdProvince} onChange={(value) => update("householdProvince", value)}/><Field label="市" value={settings.householdCity} onChange={(value) => update("householdCity", value)}/><Field label="县区" value={settings.householdCounty} onChange={(value) => update("householdCounty", value)}/></div></fieldset>
-          <fieldset><legend>排除户籍地</legend><p className="fieldset-help">用于仅查看外来人员，例如排除本县户籍。</p><div className="field-grid three"><Field label="省" value={settings.excludeHouseholdProvince} onChange={(value) => update("excludeHouseholdProvince", value)}/><Field label="市" value={settings.excludeHouseholdCity} onChange={(value) => update("excludeHouseholdCity", value)}/><Field label="县区" value={settings.excludeHouseholdCounty} onChange={(value) => update("excludeHouseholdCounty", value)}/></div></fieldset>
-          <fieldset><legend>人员条件</legend><div className="field-grid four"><NumberField label="最小年龄" value={settings.minAge} onChange={(value) => update("minAge", value)}/><NumberField label="最大年龄" value={settings.maxAge} onChange={(value) => update("maxAge", value)}/><label className="field"><span>性别</span><select value={settings.gender} onChange={(event) => update("gender", event.target.value as AnalysisSettings["gender"])}><option value="">不限</option><option>男</option><option>女</option></select></label><span /></div></fieldset>
           <fieldset><legend>选定入住时间范围</legend><p className="fieldset-help">设置任一边界后，仅按范围内记录分析，并停用滚动 7/30/365 天频次计分。</p><div className="field-grid three"><DateTimeField label="开始时间" value={settings.frequencyStart} onChange={(value) => update("frequencyStart", value)}/><DateTimeField label="结束时间" value={settings.frequencyEnd} onChange={(value) => update("frequencyEnd", value)}/><NumberField label="范围内入住阈值" value={settings.frequencyThreshold} onChange={(value) => update("frequencyThreshold", value ?? 1)} required/></div></fieldset>
           <fieldset><legend>高频入住阈值</legend><p className="fieldset-help">未设置入住时间边界时，滚动频次规则生效。</p><div className="field-grid three"><NumberField label="7 天" value={settings.weekThreshold} onChange={(value) => update("weekThreshold", value ?? 1)} required/><NumberField label="30 天" value={settings.monthThreshold} onChange={(value) => update("monthThreshold", value ?? 1)} required/><NumberField label="365 天" value={settings.yearThreshold} onChange={(value) => update("yearThreshold", value ?? 1)} required/></div></fieldset>
         </div>
@@ -607,8 +651,21 @@ function frequencyScopeLabel(settings: AnalysisSettings): string {
   return `7/30/365 天：${settings.weekThreshold}/${settings.monthThreshold}/${settings.yearThreshold} 次`;
 }
 
+function analysisTimeScopeLabel(settings: AnalysisSettings): string {
+  if (!settings.frequencyStart && !settings.frequencyEnd) return "全部有效入住";
+  const start = settings.frequencyStart?.replace("T", " ") ?? "最早记录";
+  const end = settings.frequencyEnd?.replace("T", " ") ?? "最新记录";
+  return `${start} 至 ${end}`;
+}
+
 function activeExtraFilterCount(query: PersonQuery): number {
-  return Number(Boolean(query.hotelSearch?.trim())) + Number((query.alertState ?? "全部人员") !== "全部人员");
+  const hasAny = (values: Array<string | undefined>) => values.some((value) => Boolean(value?.trim()));
+  return Number(Boolean(query.hotelSearch?.trim()))
+    + Number(hasAny([query.hotelProvince, query.hotelCity, query.hotelCounty]))
+    + Number(hasAny([query.householdProvince, query.householdCity, query.householdCounty]))
+    + Number(hasAny([query.excludeHouseholdProvince, query.excludeHouseholdCity, query.excludeHouseholdCounty]))
+    + Number(query.minAge != null || query.maxAge != null || Boolean(query.gender))
+    + Number((query.alertState ?? "全部人员") !== "全部人员");
 }
 
 function errorMessage(error: unknown): string {

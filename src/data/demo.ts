@@ -26,6 +26,11 @@ const people: PersonSummary[] = [
     level: "高风险",
     alertCount: 4,
     alertTitles: ["不同住宿地点时间重合", "30 天高频入住", "365 天高频入住"],
+    hotelNames: ["阊江商务酒店", "牯牛降宾馆", "碧阳客栈"],
+    hotelRegions: [
+      { province: "安徽省", city: "黄山市", county: "祁门县", region: "安徽省 黄山市 祁门县" },
+      { province: "安徽省", city: "黄山市", county: "黟县", region: "安徽省 黄山市 黟县" },
+    ],
   },
   {
     personKey: "510104199001012428",
@@ -44,6 +49,8 @@ const people: PersonSummary[] = [
     level: "高风险",
     alertCount: 2,
     alertTitles: ["不同住宿地点时间重合", "30 天高频入住"],
+    hotelNames: ["锦江城市酒店", "成都西驿馆"],
+    hotelRegions: [{ province: "四川省", city: "成都市", county: "锦江区", region: "四川省 成都市 锦江区" }],
   },
   {
     personKey: "330106198704233516",
@@ -62,6 +69,8 @@ const people: PersonSummary[] = [
     level: "中风险",
     alertCount: 2,
     alertTitles: ["同日非重合入住超过 3 次", "365 天高频入住"],
+    hotelNames: ["西湖云居", "湖滨商务宾馆"],
+    hotelRegions: [{ province: "浙江省", city: "杭州市", county: "西湖区", region: "浙江省 杭州市 西湖区" }],
   },
   {
     personKey: "341022199506164520",
@@ -80,6 +89,8 @@ const people: PersonSummary[] = [
     level: "关注",
     alertCount: 1,
     alertTitles: ["30 天高频入住"],
+    hotelNames: ["休宁客栈"],
+    hotelRegions: [{ province: "安徽省", city: "黄山市", county: "休宁县", region: "安徽省 黄山市 休宁县" }],
   },
   {
     personKey: "360103198211083812",
@@ -98,6 +109,8 @@ const people: PersonSummary[] = [
     level: "关注",
     alertCount: 1,
     alertTitles: ["365 天高频入住"],
+    hotelNames: ["南昌西湖宾馆"],
+    hotelRegions: [{ province: "江西省", city: "南昌市", county: "西湖区", region: "江西省 南昌市 西湖区" }],
   },
   {
     personKey: "341003199810273149",
@@ -116,6 +129,8 @@ const people: PersonSummary[] = [
     level: "正常",
     alertCount: 0,
     alertTitles: [],
+    hotelNames: ["黄山驿站"],
+    hotelRegions: [{ province: "安徽省", city: "黄山市", county: "黄山区", region: "安徽省 黄山市 黄山区" }],
   },
   {
     personKey: "340104197905112770",
@@ -134,6 +149,8 @@ const people: PersonSummary[] = [
     level: "正常",
     alertCount: 0,
     alertTitles: [],
+    hotelNames: ["蜀山商务酒店"],
+    hotelRegions: [{ province: "安徽省", city: "合肥市", county: "蜀山区", region: "安徽省 合肥市 蜀山区" }],
   },
   {
     personKey: "320102199307194926",
@@ -152,6 +169,8 @@ const people: PersonSummary[] = [
     level: "正常",
     alertCount: 0,
     alertTitles: [],
+    hotelNames: ["玄武湖宾馆"],
+    hotelRegions: [{ province: "江苏省", city: "南京市", county: "玄武区", region: "江苏省 南京市 玄武区" }],
   },
 ];
 
@@ -270,7 +289,7 @@ export const demoSnapshot: WorkspaceSnapshot = {
   },
   people,
   sessions,
-  settings: { ...DEFAULT_SETTINGS, province: "安徽省", city: "黄山市" },
+  settings: { ...DEFAULT_SETTINGS },
   importStats: {
     imported: 1274,
     duplicateCount: 43,
@@ -304,4 +323,3 @@ export function getDemoDetail(personKey: string): PersonDetail {
     evidence: evidence.slice(0, Math.min(evidence.length, Math.max(1, person.alertCount))),
   };
 }
-

@@ -1,21 +1,11 @@
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AnalysisSettings {
-    pub province: String,
-    pub city: String,
-    pub county: String,
-    pub household_province: String,
-    pub household_city: String,
-    pub household_county: String,
-    pub exclude_household_province: String,
-    pub exclude_household_city: String,
-    pub exclude_household_county: String,
-    pub min_age: Option<u8>,
-    pub max_age: Option<u8>,
-    pub gender: String,
     pub frequency_start: Option<NaiveDateTime>,
     pub frequency_end: Option<NaiveDateTime>,
     pub frequency_threshold: usize,
@@ -27,18 +17,6 @@ pub struct AnalysisSettings {
 impl Default for AnalysisSettings {
     fn default() -> Self {
         Self {
-            province: String::new(),
-            city: String::new(),
-            county: String::new(),
-            household_province: String::new(),
-            household_city: String::new(),
-            household_county: String::new(),
-            exclude_household_province: String::new(),
-            exclude_household_city: String::new(),
-            exclude_household_county: String::new(),
-            min_age: None,
-            max_age: None,
-            gender: String::new(),
             frequency_start: None,
             frequency_end: None,
             frequency_threshold: 3,
@@ -47,6 +25,15 @@ impl Default for AnalysisSettings {
             year_threshold: 144,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HotelRegion {
+    pub province: String,
+    pub city: String,
+    pub county: String,
+    pub region: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +105,8 @@ pub struct PersonSummary {
     pub alert_titles: Vec<String>,
     #[serde(default)]
     pub hotel_names: Vec<String>,
+    #[serde(default)]
+    pub hotel_regions: Vec<HotelRegion>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -251,3 +240,23 @@ pub fn calculate_age(birth: Option<NaiveDate>, today: NaiveDate) -> Option<u8> {
 }
 
 use chrono::Datelike;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_analysis_filter_fields_are_ignored_during_deserialization() {
+        let settings: AnalysisSettings = serde_json::from_value(serde_json::json!({
+            "province": "安徽省",
+            "householdCounty": "祁门县",
+            "minAge": 18,
+            "gender": "男",
+            "weekThreshold": 5
+        }))
+        .unwrap();
+        assert_eq!(settings.week_threshold, 5);
+        assert_eq!(settings.month_threshold, 12);
+        assert!(settings.frequency_start.is_none());
+    }
+}

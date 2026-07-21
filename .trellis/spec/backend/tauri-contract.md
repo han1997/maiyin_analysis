@@ -54,7 +54,8 @@ Storage rules:
 | No recognizable id/time columns | `empty_import` | Explain which files were skipped |
 | All rows are duplicates or under 10 minutes | `empty_import` | Explain the exclusion reason |
 | Fewer than two merge sessions | `validation_error` | Disable merge and reject direct command |
-| Invalid age range or threshold | `validation_error` | Keep parameter panel open and identify the field |
+| Invalid time range or threshold | `validation_error` | Keep parameter panel open and identify the field |
+| Result-filter minimum age exceeds maximum age | No Rust call | Keep the current list and show a validation toast |
 | Missing session/person | `session_not_found` or `validation_error` | Show a retryable error, never crash the shell |
 | Export path canceled | No Rust call | Show a cancellation message without error styling |
 | Legacy `.xls` text differs from reference | Compatibility failure | Do not claim parity; route only `.xls` through a future narrow adapter |
@@ -164,12 +165,12 @@ for entry in WalkDir::new(path).follow_links(false) {
 }
 ```
 
-## Scenario: upstream scoring parity
+## Scenario: analysis ownership and result filtering
 
 ### 1. Scope / Trigger
 
 Applies whenever analysis settings, alert formulas, result summary fields,
-detail evidence, imported-record views, history JSON, or exports change.
+detail evidence, result filters, imported-record views, history JSON, or exports change.
 
 ### 2. Signatures
 
@@ -179,18 +180,31 @@ get_imported_records() -> Result<Vec<ImportedStayRecord>, CommandError>
 within_analysis_time_window(record: &Record, settings: &AnalysisSettings) -> bool
 ```
 
+```ts
+filterPeople(people: PersonSummary[], query: PersonQuery): PersonPage
+```
+
 ### 3. Contracts
 
-- `AnalysisSettings` includes nullable `frequencyStart`/`frequencyEnd` plus
-  thresholds for selected-window, 7-day, 30-day, and 365-day frequency.
-- Defaults are `3`, `3`, `12`, and `144` respectively.
-- `get_imported_records` is loaded only when the records tab opens and returns
-  only records inside the current scope and check-in boundary; snapshots do
-  not transfer every raw row through IPC.
-- `PersonSummary` includes `maxWeekCount`, `maxMonthCount`, `maxYearCount`, and
-  `hotelNames`; newly added persisted summary fields use serde defaults.
-- React never computes scores. It submits settings once and renders Rust DTOs.
-- Selected-window frequency and rolling frequency are mutually exclusive.
+- `AnalysisSettings` contains only nullable `frequencyStart`/`frequencyEnd`
+  plus thresholds for selected-window, 7-day, 30-day, and 365-day frequency.
+- Hotel jurisdiction, household include/exclude, age, and gender belong to
+  frontend `PersonQuery`; changing them must not call `reanalyze` or alter scores.
+- Threshold defaults are `3`, `3`, `12`, and `144` respectively.
+- `get_imported_records` returns only records inside the analysis check-in
+  boundary; snapshots do not transfer every raw row through IPC.
+- `PersonSummary` includes `maxWeekCount`, `maxMonthCount`, `maxYearCount`,
+  `hotelNames`, and `hotelRegions`. Each hotel-region entry is
+  `{ province, city, county, region }`; persisted additions use serde defaults.
+- Hotel-name input is split on comma, Chinese comma, enumeration comma,
+  semicolon, or newline. Every non-empty term must fuzzy-match at least one
+  hotel name (AND across terms).
+- Populated province/city/county filters must match one shared `hotelRegions`
+  entry; never combine components from different stays.
+- Stored sessions use schema version `2`. Loading version `1` re-runs analysis
+  once with the current settings contract and persists the upgraded session.
+- React never computes scores. Selected-window and rolling frequency scoring
+  remain mutually exclusive in Rust.
 - Scores are: overlap `min(35, 20 + P*2 + D*5)`, same-day-many
   `min(45, 25 + (N-4)*5)`, frequency `min(80, 45 + (C-T)*6)`.
 
@@ -200,37 +214,49 @@ within_analysis_time_window(record: &Record, settings: &AnalysisSettings) -> boo
 | --- | --- |
 | Any threshold outside `1..=99999` | `validation_error` naming the period |
 | Start boundary after end boundary | `validation_error` and keep settings UI open |
+| Result-filter minimum age exceeds maximum age | Frontend toast; do not update the applied query or call Rust |
 | Missing check-in | Exclude from time-window analysis |
-| Old history lacks new settings/summary fields | Load serde defaults and reanalyze normally |
+| Old summary lacks `hotelRegions` | Deserialize to an empty list via serde default |
+| Stored session schema is below `2` | Reanalyze from stored records, update stats/analyses, then persist schema `2` |
 
 ### 5. Good / Base / Bad Cases
 
 - Good: one selected boundary is set, all totals/evidence/exports use that
   boundary, and no rolling frequency alert scores.
-- Base: no boundary is set, rolling 7/30/365-day alerts may independently score.
-- Bad: React filters imported records by time while Rust detail/export retains
-  out-of-window records.
+- Good: `A，B` returns only people whose hotel set fuzzy-matches both terms,
+  while their Rust score and alerts remain unchanged.
+- Base: no result filter is active, so the full analyzed people collection is paged.
+- Bad: adding province, household, age, or gender back to `AnalysisSettings`,
+  because this changes the evidence set and reintroduces slow searches.
+- Bad: matching province from one stay and county from another; all populated
+  jurisdiction components must match one structured hotel-region entry.
 
 ### 6. Tests Required
 
 - Same-room overlap alerts at the base score; different room scores higher.
-- Selected-window count greater than threshold produces only
-  `window_frequency`.
+- Selected-window count greater than threshold produces only `window_frequency`.
 - Narrow boundaries remove outside records from totals and evidence ids.
-- Fuzzy hotel-name filtering matches ordered non-contiguous characters.
-- Frontend build asserts all new camelCase DTO fields.
+- Fuzzy hotel-name filtering matches ordered non-contiguous characters and
+  multiple separators use AND semantics.
+- Hotel jurisdiction tests assert same-entry province/city/county matching.
+- Household include/exclude, age, gender, and unknown-age behavior have frontend tests.
+- Legacy settings ignore removed fields, missing `hotelRegions` defaults safely,
+  and schema `1` upgrades exactly once.
+- Frontend build asserts all camelCase DTO fields.
 
 ### 7. Wrong vs Correct
 
 #### Wrong
 
 ```ts
-const score = selectedRows.length > threshold ? 45 : 0;
+await appApi.reanalyze({ ...settings, province: "安徽省" });
 ```
 
 #### Correct
 
 ```ts
-const snapshot = await appApi.reanalyze(draftSettings);
-setSnapshot(snapshot);
+setQuery((current) => ({ ...current, hotelProvince: "安徽省", page: 1 }));
 ```
+
+Result filters narrow the rendered `PersonSummary` collection. Only time and
+frequency settings cross the Tauri command boundary and trigger recalculation.
