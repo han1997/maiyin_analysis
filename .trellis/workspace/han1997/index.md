@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
+- **Total Sessions**: 5
 - **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~140 | Active |
+| `journal-1.md` | ~173 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-07-22 | Simplify analysis workspace UI | `3e9b38c` | `main` |
 | 4 | 2026-07-22 | Sync upstream scoring rules and analysis UI | `f46e12c` | `main` |
 | 3 | 2026-07-21 | Fix legacy XLS import compatibility | `e733117` | `main` |
 | 2 | 2026-07-21 | fix folder recursive import + archive task | `81e689e` | `main` |
