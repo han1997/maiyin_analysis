@@ -51,12 +51,17 @@ owns schema compatibility.
   or newline. Each term becomes an ordered fuzzy `LIKE` pattern and every term must
   match one normalized hotel row.
 - Province/city/county hotel filters are evaluated inside one correlated region row.
-- Database version `1` is explicitly cleared and rebuilt as version `2`; the user chose
-  re-import over migration. Database version `2` is migrated in place to version `3`
-  by `ALTER TABLE` adding the structured filter columns and backfilling them from
-  `record_json`, preserving already-imported data. Any other nonzero unsupported
-  `user_version` is rejected. Legacy JSON session files and `index.json` are not read
-  or migrated.
+- Database versions `1` and `2` are both cleared and rebuilt as version `3` — the user
+  chose re-import over migration. `initialize_schema` calls `reset_legacy_database` for
+  either legacy version, which drops all application tables, resets `user_version = 0`,
+  then recreates the v3 schema, rather than backfilling structured columns from
+  `record_json`. Any other nonzero unsupported `user_version` is rejected. Legacy JSON
+  session files and `index.json` are not read or migrated.
+- Schema changes prefer "clear old data + re-import" over writing migration/backfill
+  code. A backfill that scans `record_json` for hundreds of thousands of rows holds a
+  write transaction and blocks the Tauri main thread (synchronous `bootstrap_workspace`),
+  producing a white screen; clearing is instantaneous. `reset_legacy_database` is the
+  single clear-and-rebuild routine reused by every legacy `user_version` branch.
 - Hidden combined sessions are persisted only to support paginated queries and are
   replaced by the next save, preventing unbounded transient-session accumulation.
 - Storage-root changes checkpoint WAL, copy the database through a temporary file, and
@@ -71,8 +76,8 @@ owns schema compatibility.
 | Duplicate row or serialization failure during save | Transaction rolls back; prior session remains readable |
 | Page size below 1 or above 500 | Clamp to `1..=500` |
 | Missing record check-in | Exclude it from imported-record pages and counts |
-| Database `user_version = 1` | Drop the old application tables, create schema version `2`, and return an empty history list |
-| Database `user_version = 2` | `ALTER TABLE records` adds structured filter columns, backfills them from `record_json`, sets `user_version = 3` |
+| Database `user_version = 1` | Drop the old application tables, create schema version `3`, and return an empty history list |
+| Database `user_version = 2` | Drop the old application tables, create schema version `3`, and return an empty history list |
 | Destination already contains `history-v1.sqlite3` | `storage_error`; never overwrite it |
 | Legacy JSON files exist beside the database | Ignore them; do not import or delete them automatically |
 
@@ -91,6 +96,9 @@ owns schema compatibility.
   Rust iterator filter, because JSON decode and IPC again scale with the whole history.
 - Bad: copying the live database without a WAL checkpoint or overwriting a destination
   database selected by the user.
+- Bad: writing a v2→v3 backfill that scans every `record_json` row inside one startup
+  transaction, because it blocks the Tauri main thread for a 453k-row history and white
+  screens; clear the database instead.
 
 ### 6. Tests Required
 
@@ -100,10 +108,9 @@ owns schema compatibility.
 - Assert imported-record total, `1..=500` page-size clamping, stable
   `check_in ASC, uid ASC` ordering, time boundaries, and missing-check-in exclusion.
 - Set a populated database to `user_version = 1`, reopen it, and assert history is empty
-  and `user_version = 2`.
-- Set a populated database to `user_version = 2` (drop v3 columns), reopen it, and
-  assert structured filter columns are backfilled from `record_json` and
-  `user_version = 3`.
+  and `user_version = 3`.
+- Set a populated database to `user_version = 2`, reopen it, and assert history is
+  empty and `user_version = 3`.
 - Assert imported-record result filters (hotel name, hotel jurisdiction, household
   include/exclude, age range, gender, keyword search) are applied in SQLite.
 - Assert household include/exclude, age, gender, risk, alert-state, and search behavior.

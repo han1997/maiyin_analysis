@@ -238,8 +238,8 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 | Result-filter minimum age exceeds maximum age | Frontend toast; do not update the applied query or call Rust |
 | Missing check-in | Exclude from time-window analysis |
 | Old summary lacks `hotelRegions` | Deserialize to an empty list via serde default |
-| SQLite `user_version = 1` | Clear application history and initialize version `2`; the user re-imports source files |
-| SQLite `user_version = 2` | Migrate in place to version `3`: ALTER TABLE adds structured filter columns, backfills them from `record_json` |
+| SQLite `user_version = 1` | Drop application tables, recreate schema version `3`, and return an empty history list; the user re-imports source files |
+| SQLite `user_version = 2` | Drop application tables, recreate schema version `3`, and return an empty history list; the user re-imports source files |
 | Other nonzero unsupported SQLite version | `storage_error`; do not attempt an implicit migration |
 
 ### 5. Good / Base / Bad Cases
@@ -277,8 +277,9 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   missing check-ins, the camelCase page DTO, and result filters (hotel name, hotel
   jurisdiction, household include/exclude, age range, gender, keyword search) applied
   in SQLite.
-- Imported-record filter tests assert the v2→v3 schema migration backfills structured
-  columns from `record_json` and preserves already-imported data.
+- A populated database at `user_version = 1` or `user_version = 2` reopens empty at
+  `user_version = 3` (cleared, not migrated); structured filter columns are populated
+  at save time, never via a startup backfill.
 - Legacy settings ignore removed analysis fields, and missing `hotelRegions` defaults safely.
 - Frontend build asserts all camelCase DTO fields.
 

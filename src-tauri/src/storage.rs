@@ -620,10 +620,8 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(sql_error)?;
-    if version == 1 {
+    if version == 1 || version == 2 {
         reset_legacy_database(connection)?;
-    } else if version == 2 {
-        migrate_records_v2_to_v3(connection)?;
     } else if version != 0 && version != DATABASE_VERSION {
         return Err(AppError::Storage(format!(
             "不支持的历史数据库版本 {version}，当前版本为 {DATABASE_VERSION}"
@@ -751,115 +749,6 @@ fn reset_legacy_database(connection: &Connection) -> Result<(), AppError> {
              PRAGMA foreign_keys = ON;",
         )
         .map_err(sql_error)
-}
-
-const RECORDS_V3_COLUMNS: [(&str, &str); 14] = [
-    ("name_norm", "TEXT NOT NULL DEFAULT ''"),
-    ("id_no_norm", "TEXT NOT NULL DEFAULT ''"),
-    ("phone_norm", "TEXT NOT NULL DEFAULT ''"),
-    ("hotel_name_norm", "TEXT NOT NULL DEFAULT ''"),
-    ("hotel_province_norm", "TEXT NOT NULL DEFAULT ''"),
-    ("hotel_city_norm", "TEXT NOT NULL DEFAULT ''"),
-    ("hotel_county_norm", "TEXT NOT NULL DEFAULT ''"),
-    ("household_region_norm", "TEXT NOT NULL DEFAULT ''"),
-    ("household_province_norm", "TEXT NOT NULL DEFAULT ''"),
-    ("household_city_norm", "TEXT NOT NULL DEFAULT ''"),
-    ("household_county_norm", "TEXT NOT NULL DEFAULT ''"),
-    ("age", "INTEGER"),
-    ("gender", "TEXT NOT NULL DEFAULT ''"),
-    ("search_text", "TEXT NOT NULL DEFAULT ''"),
-];
-
-fn migrate_records_v2_to_v3(connection: &Connection) -> Result<(), AppError> {
-    let existing_columns: HashSet<String> = {
-        let mut statement = connection
-            .prepare("PRAGMA table_info(records)")
-            .map_err(sql_error)?;
-        let mut rows = statement.query([]).map_err(sql_error)?;
-        let mut columns = HashSet::new();
-        while let Some(row) = rows.next().map_err(sql_error)? {
-            let name: String = row.get(1).map_err(sql_error)?;
-            columns.insert(name);
-        }
-        columns
-    };
-    for (column, declaration) in RECORDS_V3_COLUMNS {
-        if !existing_columns.contains(column) {
-            connection
-                .execute(
-                    &format!("ALTER TABLE records ADD COLUMN {column} {declaration}"),
-                    [],
-                )
-                .map_err(sql_error)?;
-        }
-    }
-
-    let records: Vec<(i64, Record)> = {
-        let mut statement = connection
-            .prepare("SELECT uid, record_json FROM records")
-            .map_err(sql_error)?;
-        let mut rows = statement.query([]).map_err(sql_error)?;
-        let mut result = Vec::new();
-        while let Some(row) = rows.next().map_err(sql_error)? {
-            let uid: i64 = row.get(0).map_err(sql_error)?;
-            let payload: String = row.get(1).map_err(sql_error)?;
-            result.push((uid, from_json::<Record>(&payload)?));
-        }
-        result
-    };
-
-    connection.execute_batch("BEGIN").map_err(sql_error)?;
-    {
-        let mut statement = connection
-            .prepare(
-                "UPDATE records SET \
-                 name_norm = ?2, id_no_norm = ?3, phone_norm = ?4, hotel_name_norm = ?5, \
-                 hotel_province_norm = ?6, hotel_city_norm = ?7, hotel_county_norm = ?8, \
-                 household_region_norm = ?9, household_province_norm = ?10, household_city_norm = ?11, \
-                 household_county_norm = ?12, age = ?13, gender = ?14, search_text = ?15 \
-                 WHERE uid = ?1",
-            )
-            .map_err(sql_error)?;
-        for (uid, record) in &records {
-            let search_text = normalize(
-                &[
-                    record.name.as_str(),
-                    record.id_no.as_str(),
-                    record.phone.as_str(),
-                    record.hotel_name.as_str(),
-                    record.region.as_str(),
-                    record.household_region.as_str(),
-                    record.gender.as_str(),
-                    &record
-                        .age
-                        .map(|value| value.to_string())
-                        .unwrap_or_default(),
-                ]
-                .join(" "),
-            );
-            statement
-                .execute(params![
-                    uid,
-                    normalize(&record.name),
-                    normalize(&record.id_no),
-                    normalize(&record.phone),
-                    normalize(&record.hotel_name),
-                    normalize(&record.province),
-                    normalize(&record.city),
-                    normalize(&record.county),
-                    normalize(&record.household_region),
-                    normalize(&record.household_province),
-                    normalize(&record.household_city),
-                    normalize(&record.household_county),
-                    record.age.map(i64::from),
-                    record.gender,
-                    search_text,
-                ])
-                .map_err(sql_error)?;
-        }
-    }
-    connection.execute_batch("COMMIT").map_err(sql_error)?;
-    Ok(())
 }
 
 fn metadata_from(connection: &Connection, session_id: &str) -> Result<SessionMetadata, AppError> {
@@ -1554,92 +1443,6 @@ mod tests {
     }
 
     #[test]
-    fn migrates_v2_records_to_v3_with_backfilled_columns() {
-        let (root, store) = test_store();
-        store.save(&sample_session()).unwrap();
-        let drop_indexes = [
-            "idx_records_hotel_name",
-            "idx_records_hotel_region",
-            "idx_records_household",
-            "idx_records_age_gender",
-            "idx_records_search",
-        ];
-        let drop_columns = [
-            "name_norm",
-            "id_no_norm",
-            "phone_norm",
-            "hotel_name_norm",
-            "hotel_province_norm",
-            "hotel_city_norm",
-            "hotel_county_norm",
-            "household_region_norm",
-            "household_province_norm",
-            "household_city_norm",
-            "household_county_norm",
-            "age",
-            "gender",
-            "search_text",
-        ];
-        {
-            let connection = store.connection().unwrap();
-            for index in drop_indexes {
-                connection
-                    .execute(&format!("DROP INDEX IF EXISTS {index}"), [])
-                    .unwrap();
-            }
-            for column in drop_columns {
-                connection
-                    .execute(&format!("ALTER TABLE records DROP COLUMN {column}"), [])
-                    .unwrap();
-            }
-            connection
-                .execute_batch("PRAGMA user_version = 2;")
-                .unwrap();
-        }
-        drop(store);
-
-        let reopened = SessionStore::open(root.clone()).unwrap();
-        let version: i64 = reopened
-            .connection()
-            .unwrap()
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, DATABASE_VERSION);
-
-        let connection = reopened.connection().unwrap();
-        let row: (String, String, Option<i64>, String) = connection
-            .query_row(
-                "SELECT hotel_name_norm, household_region_norm, age, search_text \
-                 FROM records WHERE uid = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
-        assert_eq!(row.0, normalize("旅馆 A"));
-        assert_eq!(row.1, normalize("安徽省 黄山市 祁门县"));
-        assert_eq!(row.2, Some(37));
-        assert!(!row.3.is_empty());
-        assert!(row.3.contains(&normalize("测试人员1")));
-        drop(connection);
-
-        let page = reopened
-            .query_imported_records(
-                "session-1",
-                &ImportedRecordsQuery {
-                    hotel_search: "旅A".into(),
-                    page: 1,
-                    page_size: 50,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        assert_eq!(page.total, 1);
-        drop(reopened);
-
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn version_one_database_is_cleared_instead_of_migrated() {
         let (root, store) = test_store();
         store.save(&sample_session()).unwrap();
@@ -1647,6 +1450,28 @@ mod tests {
             .connection()
             .unwrap()
             .execute_batch("PRAGMA user_version = 1;")
+            .unwrap();
+        drop(store);
+
+        let rebuilt = SessionStore::open(root.clone()).unwrap();
+        assert!(rebuilt.list().unwrap().is_empty());
+        let version: i64 = rebuilt
+            .connection()
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, DATABASE_VERSION);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn version_two_database_is_cleared_instead_of_migrated() {
+        let (root, store) = test_store();
+        store.save(&sample_session()).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch("PRAGMA user_version = 2;")
             .unwrap();
         drop(store);
 
