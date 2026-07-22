@@ -238,3 +238,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: 修复导入记录分页与视图切换
+
+**Date**: 2026-07-22
+**Task**: 修复导入记录分页与视图切换
+**Branch**: `main`
+
+### Summary
+
+将导入记录改为 SQLite 后端分页，保留分析时间范围语义；美化人员研判与导入记录标签，补充无障碍状态、回归测试和跨层规范。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b8b99d6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

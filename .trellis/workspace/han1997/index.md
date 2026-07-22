@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~240 | Active |
+| `journal-1.md` | ~273 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-07-22 | 修复导入记录分页与视图切换 | `b8b99d6` | `main` |
 | 7 | 2026-07-22 | Optimize import and history performance | `c3b65c7`, `10f32cf` | `main` |
 | 6 | 2026-07-22 | Optimize hotel result filters | `47782f6` | `main` |
 | 5 | 2026-07-22 | Simplify analysis workspace UI | `3e9b38c` | `main` |
