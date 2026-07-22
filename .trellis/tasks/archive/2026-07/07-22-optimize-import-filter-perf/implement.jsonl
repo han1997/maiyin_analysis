@@ -1,0 +1,7 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `py -3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite history schema, transaction/contract rules, v3 schema details, clear+re-import migration policy - the spec being extended to v4"}
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Cross-layer command/DTO contract - filter input shape PersonQuery/ImportedRecordsQuery must stay wire-compatible"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Backend pagination contract (people page, imported records page) - must not regress when filter SQL is rewritten"}
+{"file": ".trellis/tasks/07-22-optimize-import-filter-perf/research/perf-recon.md", "reason": "Perf bottleneck map across 9 files - identifies the slow non-sargable LIKE sites that must be rewritten"}
+{"file": ".trellis/tasks/07-22-optimize-import-filter-perf/research/sqlite-filter-indexability.md", "reason": "Decision matrix per slow LIKE clause: FTS5 trigram for search_text/hotel_name, split columns for region, prefix vs substring, EXPLAIN QUERY PLAN verification protocol, 453k/1M benchmark protocol"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer data flow guide - filter/DTO semantics span Rust storage + TS contract + React state; ensure rewrite preserves parity"}

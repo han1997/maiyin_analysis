@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `py -3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Spec contract being extended - verify schema v4 migration + FTS5 + filter rewrite stay compliant (single tx + prepared, clear+re-import only, no full-session scan)"}
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Verify PersonQuery/ImportedRecordsQuery DTO shape unchanged so frontend contract holds after filter rewrite"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Backend pagination/loading-state contract that frontend relies on - verify no regression"}
+{"file": ".trellis/tasks/07-22-optimize-import-filter-perf/research/sqlite-filter-indexability.md", "reason": "Verification protocol: EXPLAIN QUERY PLAN assertions (SEARCH vs SCAN), semantic-preservation tests (trigram vs LIKE, fuzzy layered, prefix vs substring, negated exclude), 453k+1M benchmark protocol"}
+{"file": ".trellis/tasks/07-22-optimize-import-filter-perf/research/perf-recon.md", "reason": "Bottleneck map + spec-allowed migration path - verify every flagged hot path was addressed and no regression on spec compliance"}
