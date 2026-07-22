@@ -271,3 +271,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: 简化分析参数并优化结果表交互
+
+**Date**: 2026-07-22
+**Task**: 简化分析参数并优化结果表交互
+**Branch**: `main`
+
+### Summary
+
+为 AnalysisSettings 增加显式 frequencyMode（rolling/selected），Rust 按模式驱动时间窗口与频次预警，旧设置按时间边界安全推断；人员研判与导入记录支持 50/100/200 每页并各自重置到第 1 页；更多筛选与导出弹窗改为受控状态，支持外部点击/Escape/互斥关闭且不被结果容器裁切；人员表改用 people-col-* 语义列宽，365 天列保持紧凑。前后端 lint/build/test/fmt/clippy 全绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `856fb75` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
