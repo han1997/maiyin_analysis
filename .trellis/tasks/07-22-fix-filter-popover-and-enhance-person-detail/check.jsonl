@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Verify popover clipping/overflow fix and maximized detail interaction tests cover disclosure open/close + keyboard"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Verify controlled maximized state, selected-alert filter state, and late-response handling"}
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Verify PersonDetail alert.evidenceIds <-> evidence.uid contract symmetry is maintained and documented"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Verify TS AlertSummary.evidenceIds added without any-cast or DTO drift"}

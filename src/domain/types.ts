@@ -26,6 +26,7 @@ export interface AlertSummary {
   title: string;
   detail: string;
   evidenceCount: number;
+  evidenceIds: number[];
 }
 
 export interface PersonSummary {

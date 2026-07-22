@@ -25,7 +25,7 @@ export const demoPeople: PersonSummary[] = [
     score: 100,
     level: "高风险",
     alertCount: 4,
-    alertTitles: ["不同住宿地点时间重合", "30 天高频入住", "365 天高频入住"],
+    alertTitles: ["不同住宿地点时间重合", "30 天高频入住", "365 天高频入住", "同日非重合入住超过 3 次"],
     hotelNames: ["阊江商务酒店", "牯牛降宾馆", "碧阳客栈"],
     hotelRegions: [
       { province: "安徽省", city: "黄山市", county: "祁门县", region: "安徽省 黄山市 祁门县" },
@@ -218,6 +218,7 @@ const alerts: AlertSummary[] = [
     title: "不同住宿地点时间重合",
     detail: "7 月 8 日发现 2 对时间重合记录，旅馆或房间信息不同。",
     evidenceCount: 3,
+    evidenceIds: [1048, 1061],
   },
   {
     kind: "month_frequency",
@@ -226,6 +227,7 @@ const alerts: AlertSummary[] = [
     title: "30 天高频入住",
     detail: "任意连续 30 天内最多入住 11 次，高于当前阈值 6 次。",
     evidenceCount: 11,
+    evidenceIds: [1048, 1089],
   },
   {
     kind: "year_frequency",
@@ -234,6 +236,16 @@ const alerts: AlertSummary[] = [
     title: "365 天高频入住",
     detail: "任意连续 365 天内最多入住 31 次，高于当前阈值 24 次。",
     evidenceCount: 31,
+    evidenceIds: [1048, 1061, 1089],
+  },
+  {
+    kind: "same_day_many",
+    severity: "中",
+    score: 25,
+    title: "同日非重合入住超过 3 次",
+    detail: "演示用：该预警未关联到具体证据行，用于展示空证据提示。",
+    evidenceCount: 0,
+    evidenceIds: [],
   },
 ];
 
@@ -318,6 +330,7 @@ export function getDemoDetail(personKey: string): PersonDetail {
       title,
       detail: "该说明由演示适配器生成。Tauri 模式将展示 Rust 分析返回的完整规则说明和证据行。",
       evidenceCount: Math.min(person.totalRecords, index === 0 ? person.maxMonthCount : person.maxYearCount),
+      evidenceIds: evidence.slice(0, Math.min(evidence.length, Math.max(1, person.alertCount))).map((record) => record.uid),
     })),
     evidence: evidence.slice(0, Math.min(evidence.length, Math.max(1, person.alertCount))),
   };

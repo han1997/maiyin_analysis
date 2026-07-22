@@ -33,6 +33,18 @@ The analysis workspace is a dense desktop tool. Keep the primary path visible an
   visible for comparison but is disabled and visually de-emphasized.
 - Data-table column widths use table-specific semantic classes. Do not use global
   `th:nth-child(...)` rules because column additions silently shift unrelated widths.
+- The person-detail inspector offers a maximize/restore toggle that widens the panel over the
+  main region; `Escape` while maximized exits maximize without closing the panel, and closing
+  the panel resets maximize. A maximize button uses `aria-pressed` and a `data-maximized`
+  state on the inspector.
+- Clicking an alert in the detail inspector filters the evidence list to that alert's
+  `evidenceIds` (matched against `EvidenceRecord.uid`) purely in React — it never calls
+  `AppApi.getPersonDetail` again. A "全部证据" control clears the filter; an alert whose
+  `evidenceIds` is empty shows an explicit empty-evidence message instead of a silent empty
+  list. The selected alert is reset when the inspected person changes.
+- Secondary toolbar popovers (filter, export) anchor so their right edge never exceeds the
+  viewport; the filter popover is right-anchored to its trigger on desktop and left-anchored
+  where the toolbar wraps on narrow windows, preserving internal vertical scroll.
 
 ---
 

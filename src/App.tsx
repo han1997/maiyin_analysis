@@ -87,6 +87,8 @@ function App() {
   const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<PersonDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailMaximized, setDetailMaximized] = useState(false);
+  const [selectedAlertIndex, setSelectedAlertIndex] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [draftSettings, setDraftSettings] = useState<AnalysisSettings | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -173,14 +175,19 @@ function App() {
   }, [activeView, recordsPageNumber, recordsPageSize, snapshot]);
 
   useEffect(() => {
-    if (!filterMenuOpen && !exportMenuOpen) return;
+    if (!filterMenuOpen && !exportMenuOpen && !detailMaximized) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!filterMenuOpen && !exportMenuOpen) return;
       const target = event.target as Node;
       if (filterMenuOpen && !filterMenuRef.current?.contains(target)) setFilterMenuOpen(false);
       if (exportMenuOpen && !exportMenuRef.current?.contains(target)) setExportMenuOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (detailMaximized) {
+        setDetailMaximized(false);
+        return;
+      }
       if (filterMenuOpen) filterTriggerRef.current?.focus();
       if (exportMenuOpen) exportTriggerRef.current?.focus();
       setFilterMenuOpen(false);
@@ -192,7 +199,7 @@ function App() {
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [exportMenuOpen, filterMenuOpen]);
+  }, [exportMenuOpen, filterMenuOpen, detailMaximized]);
 
   const totalPages = Math.max(1, Math.ceil(page.total / page.pageSize));
   const recordsTotalPages = Math.max(1, Math.ceil(recordsPage.total / recordsPage.pageSize));
@@ -208,6 +215,8 @@ function App() {
         setDraftSettings(structuredClone(next.settings));
         setQuery((current) => ({ ...current, page: 1 }));
         setDetail(null);
+        setDetailMaximized(false);
+        setSelectedAlertIndex(null);
         setRecordsPage({ ...initialRecordsPage, pageSize: recordsPageSize });
         setRecordsPageNumber(1);
         setFilterMenuOpen(false);
@@ -227,6 +236,7 @@ function App() {
   async function openPerson(personKey: string) {
     try {
       setDetailLoading(true);
+      setSelectedAlertIndex(null);
       const next = await appApi.getPersonDetail(personKey);
       setDetail(next);
     } catch (error) {
@@ -658,7 +668,21 @@ function App() {
       </main>
 
       {(detail || detailLoading) && (
-        <DetailInspector detail={detail} loading={detailLoading} showSensitive={showSensitive} onClose={() => setDetail(null)} />
+        <DetailInspector
+          detail={detail}
+          loading={detailLoading}
+          showSensitive={showSensitive}
+          maximized={detailMaximized}
+          selectedAlertIndex={selectedAlertIndex}
+          onClose={() => {
+            setDetail(null);
+            setDetailMaximized(false);
+            setSelectedAlertIndex(null);
+          }}
+          onToggleMaximize={() => setDetailMaximized((value) => !value)}
+          onSelectAlert={(index) => setSelectedAlertIndex((current) => (current === index ? null : index))}
+          onClearAlertFilter={() => setSelectedAlertIndex(null)}
+        />
       )}
 
       {settingsOpen && draftSettings && (
@@ -746,16 +770,43 @@ function PageSizeSelect({ label, unit, value, onChange }: { label: string; unit:
   );
 }
 
-function DetailInspector({ detail, loading, showSensitive, onClose }: { detail: PersonDetail | null; loading: boolean; showSensitive: boolean; onClose: () => void }) {
+function DetailInspector({ detail, loading, showSensitive, maximized, selectedAlertIndex, onClose, onToggleMaximize, onSelectAlert, onClearAlertFilter }: {
+  detail: PersonDetail | null;
+  loading: boolean;
+  showSensitive: boolean;
+  maximized: boolean;
+  selectedAlertIndex: number | null;
+  onClose: () => void;
+  onToggleMaximize: () => void;
+  onSelectAlert: (index: number) => void;
+  onClearAlertFilter: () => void;
+}) {
+  const filteredEvidence = (() => {
+    if (!detail || selectedAlertIndex === null) return detail?.evidence ?? [];
+    const alert = detail.alerts[selectedAlertIndex];
+    if (!alert) return [];
+    const ids = alert.evidenceIds;
+    return detail.evidence.filter((record) => ids.includes(record.uid));
+  })();
+
   return (
-    <aside className="detail-inspector" aria-label="人员详情">
+    <aside className="detail-inspector" aria-label="人员详情" data-maximized={maximized ? "true" : "false"}>
       {loading || !detail ? (
         <div className="detail-skeleton"><span /><span /><span /><span /><span /></div>
       ) : (
         <>
           <header className="detail-header">
             <div><span className="detail-kicker">人员核查详情</span><h2>{detail.person.name}</h2><p>{showSensitive ? detail.person.idNo : maskIdentity(detail.person.idNo)} · {showSensitive ? detail.person.phone : maskPhone(detail.person.phone)}</p></div>
-            <button className="icon-button" type="button" aria-label="关闭详情" onClick={onClose}><Icon name="close" /></button>
+            <div className="detail-header-actions">
+              <button
+                className="icon-button"
+                type="button"
+                aria-label={maximized ? "还原详情" : "最大化详情"}
+                aria-pressed={maximized}
+                onClick={onToggleMaximize}
+              ><Icon name={maximized ? "restore" : "maximize"} /></button>
+              <button className="icon-button" type="button" aria-label="关闭详情" onClick={onClose}><Icon name="close" /></button>
+            </div>
           </header>
           <div className="detail-risk-line"><RiskBadge level={detail.person.level} /><strong>{detail.person.score}<span>/100</span></strong><span>{detail.person.alertCount} 项预警 · {detail.person.totalRecords} 条有效入住</span></div>
           <div className="detail-scroll">
@@ -769,18 +820,46 @@ function DetailInspector({ detail, loading, showSensitive, onClose }: { detail: 
             <section className="detail-section">
               <div className="detail-section-heading"><h3>预警说明</h3><span>{detail.alerts.length} 项</span></div>
               <div className="alert-list">
-                {detail.alerts.length ? detail.alerts.map((alert) => (
-                  <article className="alert-item" key={`${alert.kind}-${alert.title}`}>
-                    <div className="alert-heading"><SeverityBadge severity={alert.severity} /><strong>{alert.title}</strong><span>+{alert.score} 分</span></div>
-                    <p>{alert.detail}</p><small>{alert.evidenceCount} 条关联证据</small>
-                  </article>
-                )) : <p className="detail-empty">当前人员未命中预警规则。</p>}
+                {detail.alerts.length ? detail.alerts.map((alert, index) => {
+                  const selected = selectedAlertIndex === index;
+                  return (
+                    <article
+                      className={`alert-item ${selected ? "is-selected" : ""}`}
+                      key={`${alert.kind}-${alert.title}`}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={selected}
+                      onClick={() => onSelectAlert(index)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          onSelectAlert(index);
+                        }
+                      }}
+                    >
+                      <div className="alert-heading"><SeverityBadge severity={alert.severity} /><strong>{alert.title}</strong><span>+{alert.score} 分</span></div>
+                      <p>{alert.detail}</p>
+                      <small>{alert.evidenceCount} 条关联证据{selected ? " · 已筛选证据" : ""}</small>
+                    </article>
+                  );
+                }) : <p className="detail-empty">当前人员未命中预警规则。</p>}
               </div>
             </section>
             <section className="detail-section evidence-section">
-              <div className="detail-section-heading"><h3>住宿证据</h3><span>{detail.evidence.length} 条</span></div>
+              <div className="detail-section-heading">
+                <h3>住宿证据</h3>
+                <div className="evidence-controls">
+                  <button
+                    type="button"
+                    className={`text-button evidence-all-toggle ${selectedAlertIndex === null ? "is-active" : ""}`}
+                    aria-pressed={selectedAlertIndex === null}
+                    onClick={onClearAlertFilter}
+                  >全部证据</button>
+                  <span>{filteredEvidence.length} 条</span>
+                </div>
+              </div>
               <div className="evidence-list">
-                {detail.evidence.map((record) => (
+                {filteredEvidence.length ? filteredEvidence.map((record) => (
                   <article className="evidence-item" key={record.uid}>
                     <div><strong>{record.hotelName}</strong><span>房间 {record.roomNo || "未填"}</span></div>
                     <p>{record.checkIn} 至 {record.checkOut || "未退房"}</p>
@@ -788,7 +867,11 @@ function DetailInspector({ detail, loading, showSensitive, onClose }: { detail: 
                     <small>{record.sourceFile} · 第 {record.sourceRow} 行</small>
                     {record.issues.map((issue) => <span className="issue-tag" key={issue}>{issue}</span>)}
                   </article>
-                ))}
+                )) : (
+                  selectedAlertIndex !== null
+                    ? <p className="detail-empty">该预警无关联证据。</p>
+                    : <p className="detail-empty">当前人员没有有效住宿证据。</p>
+                )}
               </div>
             </section>
           </div>

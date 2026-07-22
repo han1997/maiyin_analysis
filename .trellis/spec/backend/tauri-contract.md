@@ -38,7 +38,7 @@ Response rules:
 
 - `WorkspaceSnapshot` contains `mode`, `stats`, `sessions`, `settings`, `importStats`, `sourceSessionIds`, and `generatedAt`; it never contains the full people collection.
 - `PersonPage` contains only `items`, `total`, `page`, and `pageSize` for the applied backend query.
-- `PersonDetail` contains one `person`, its rule `alerts`, and on-demand `evidence` rows.
+- `PersonDetail` contains one `person`, its rule `alerts`, and on-demand `evidence` rows. Each `AlertSummary` carries `evidenceIds: number[]` (camelCase of Rust `evidence_ids`, `#[serde(default)]`) listing the `EvidenceRecord.uid` values that triggered that alert; the UI may filter the rendered `evidence` rows by matching `evidenceIds` against `evidence[].uid` without calling Rust again.
 - `ImportedRecordsPage` contains only `items`, `total`, `page`, and `pageSize`; each item
   is an `ImportedStayRecord` inside the current analysis check-in boundary.
 - `CommandError` always serializes `{ code: string, message: string }`; the UI displays `message` and does not expose Rust internals.

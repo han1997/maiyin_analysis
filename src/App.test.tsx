@@ -126,4 +126,50 @@ describe("App", () => {
     expect(screen.getByText("最小年龄不能大于最大年龄。")).toBeTruthy();
     expect(await screen.findByRole("button", { name: /查看 周明远 详情/ })).toBeTruthy();
   });
+
+  it("maximizes the detail inspector and restores via button or Escape", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "7月上旬旅馆数据" }, { timeout: 2_000 });
+    fireEvent.click(await screen.findByRole("button", { name: /查看 周明远 详情/ }));
+    await screen.findByRole("heading", { name: "周明远" });
+
+    const maximize = screen.getByRole("button", { name: "最大化详情" });
+    expect(maximize.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(maximize);
+
+    const restore = screen.getByRole("button", { name: "还原详情" });
+    expect(restore.getAttribute("aria-pressed")).toBe("true");
+    const inspector = restore.closest(".detail-inspector");
+    expect(inspector?.getAttribute("data-maximized")).toBe("true");
+
+    fireEvent.click(restore);
+    expect(screen.getByRole("button", { name: "最大化详情" }).getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(screen.getByRole("button", { name: "最大化详情" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByRole("button", { name: "最大化详情" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: "关闭详情" })).toBeTruthy();
+  });
+
+  it("links alerts to evidence and restores all evidence on demand", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "7月上旬旅馆数据" }, { timeout: 2_000 });
+    fireEvent.click(await screen.findByRole("button", { name: /查看 周明远 详情/ }));
+    await screen.findByRole("heading", { name: "周明远" });
+    await screen.findByText("阊江商务酒店");
+    expect(screen.getByText("牯牛降宾馆")).toBeTruthy();
+    expect(screen.getByText("碧阳客栈")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /不同住宿地点时间重合/ }));
+    expect(screen.getByText("阊江商务酒店")).toBeTruthy();
+    expect(screen.getByText("牯牛降宾馆")).toBeTruthy();
+    expect(screen.queryByText("碧阳客栈")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "全部证据" }));
+    expect(screen.getByText("碧阳客栈")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /同日非重合入住超过 3 次/ }));
+    expect(screen.getByText("该预警无关联证据。")).toBeTruthy();
+    expect(screen.queryByText("阊江商务酒店")).toBeNull();
+  });
 });

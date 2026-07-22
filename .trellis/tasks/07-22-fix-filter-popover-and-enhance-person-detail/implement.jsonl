@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Progressive disclosure popover behavior + interaction testing conventions for filter popover and maximized detail"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Controlled disclosure state, selected-alert filter state, and loading-state patterns for detail inspector"}
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Cross-layer DTO contract for PersonDetail.alerts[].evidenceIds <-> evidence[].uid alignment; AlertSummary.evidence_ids serde default"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "DTO type sync convention — adding evidenceIds to TS AlertSummary to match Rust serde output"}
