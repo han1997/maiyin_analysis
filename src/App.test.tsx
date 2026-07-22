@@ -59,6 +59,65 @@ describe("App", () => {
     expect(await screen.findByText("演示人员051")).toBeTruthy();
   });
 
+  it("opens the imported-records filter popover and closes on escape or outside click", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "7月上旬旅馆数据" }, { timeout: 2_000 });
+
+    fireEvent.click(screen.getByRole("tab", { name: /导入记录/ }));
+    await screen.findByText("演示人员001");
+
+    const filterTrigger = screen.getByRole("button", { name: /更多筛选/ });
+    expect(filterTrigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(filterTrigger);
+    expect(filterTrigger.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("人员条件")).toBeTruthy();
+    expect(screen.queryByText("预警状态")).toBeNull();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(filterTrigger.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(filterTrigger);
+    fireEvent.pointerDown(document.body);
+    expect(filterTrigger.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("applies imported-records filters and resets to the first page", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "7月上旬旅馆数据" }, { timeout: 2_000 });
+
+    fireEvent.click(screen.getByRole("tab", { name: /导入记录/ }));
+    await screen.findByText("演示人员001");
+    expect(screen.getByText(/共 1,274 条/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /更多筛选/ }));
+    fireEvent.change(screen.getByLabelText("性别"), { target: { value: "女" } });
+    fireEvent.click(screen.getByRole("button", { name: "应用筛选" }));
+
+    expect(await screen.findByText(/共 637 条/)).toBeTruthy();
+    expect(screen.getByText(/第 1 \/ 13 页/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /更多筛选/ }));
+    fireEvent.click(screen.getByRole("button", { name: "清除全部筛选" }));
+    expect(await screen.findByText(/共 1,274 条/)).toBeTruthy();
+  });
+
+  it("rejects an inverted records age range without applying it", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "7月上旬旅馆数据" }, { timeout: 2_000 });
+
+    fireEvent.click(screen.getByRole("tab", { name: /导入记录/ }));
+    await screen.findByText("演示人员001");
+    expect(screen.getByText(/共 1,274 条/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /更多筛选/ }));
+    fireEvent.change(screen.getByLabelText("最小年龄"), { target: { value: "40" } });
+    fireEvent.change(screen.getByLabelText("最大年龄"), { target: { value: "20" } });
+    fireEvent.click(screen.getByRole("button", { name: "应用筛选" }));
+
+    expect(screen.getByText("最小年龄不能大于最大年龄。")).toBeTruthy();
+    expect(screen.getByText(/共 1,274 条/)).toBeTruthy();
+  });
+
   it("applies multi-hotel result filters without reopening analysis settings", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "7月上旬旅馆数据" }, { timeout: 2_000 });

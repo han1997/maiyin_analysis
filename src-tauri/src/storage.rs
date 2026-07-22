@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 const DATA_FOLDER: &str = "MaiyinAnalysisData";
 const DATABASE_FILE: &str = "history-v1.sqlite3";
-const DATABASE_VERSION: i64 = 2;
+const DATABASE_VERSION: i64 = 3;
 
 #[derive(Debug, Clone)]
 pub struct SessionStore {
@@ -142,11 +142,32 @@ impl SessionStore {
         {
             let mut record_statement = transaction
                 .prepare(
-                    "INSERT INTO records(session_id, uid, person_key, check_in, record_json) \
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO records(session_id, uid, person_key, check_in, record_json, \
+                     name_norm, id_no_norm, phone_norm, hotel_name_norm, hotel_province_norm, \
+                     hotel_city_norm, hotel_county_norm, household_region_norm, \
+                     household_province_norm, household_city_norm, household_county_norm, \
+                     age, gender, search_text) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
+                     ?16, ?17, ?18, ?19)",
                 )
                 .map_err(sql_error)?;
             for record in &session.records {
+                let search_text = normalize(
+                    &[
+                        record.name.as_str(),
+                        record.id_no.as_str(),
+                        record.phone.as_str(),
+                        record.hotel_name.as_str(),
+                        record.region.as_str(),
+                        record.household_region.as_str(),
+                        record.gender.as_str(),
+                        &record
+                            .age
+                            .map(|value| value.to_string())
+                            .unwrap_or_default(),
+                    ]
+                    .join(" "),
+                );
                 record_statement
                     .execute(params![
                         session.session_id,
@@ -156,6 +177,20 @@ impl SessionStore {
                             .check_in
                             .map(|value| value.format("%Y-%m-%d %H:%M:%S").to_string()),
                         json(record)?,
+                        normalize(&record.name),
+                        normalize(&record.id_no),
+                        normalize(&record.phone),
+                        normalize(&record.hotel_name),
+                        normalize(&record.province),
+                        normalize(&record.city),
+                        normalize(&record.county),
+                        normalize(&record.household_region),
+                        normalize(&record.household_province),
+                        normalize(&record.household_city),
+                        normalize(&record.household_county),
+                        record.age.map(i64::from),
+                        record.gender,
+                        search_text,
                     ])
                     .map_err(sql_error)?;
             }
@@ -392,22 +427,7 @@ impl SessionStore {
         let settings = metadata_from(&connection, session_id)?.settings;
         let page_size = query.page_size.clamp(1, 500);
         let page = query.page.max(1).min(usize_from_i64(i64::MAX) / page_size);
-        let mut clauses = vec![
-            "session_id = ?".to_string(),
-            "check_in IS NOT NULL".to_string(),
-        ];
-        let mut values = vec![Value::Text(session_id.to_string())];
-        if settings.frequency_mode == FrequencyMode::Selected {
-            if let Some(start) = settings.frequency_start {
-                clauses.push("check_in >= ?".into());
-                values.push(Value::Text(start.format("%Y-%m-%d %H:%M:%S").to_string()));
-            }
-            if let Some(end) = settings.frequency_end {
-                clauses.push("check_in <= ?".into());
-                values.push(Value::Text(end.format("%Y-%m-%d %H:%M:%S").to_string()));
-            }
-        }
-        let where_sql = clauses.join(" AND ");
+        let (where_sql, values) = build_records_filter(session_id, query, &settings);
         let total: i64 = connection
             .query_row(
                 &format!("SELECT COUNT(*) FROM records WHERE {where_sql}"),
@@ -602,6 +622,8 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
         .map_err(sql_error)?;
     if version == 1 {
         reset_legacy_database(connection)?;
+    } else if version == 2 {
+        migrate_records_v2_to_v3(connection)?;
     } else if version != 0 && version != DATABASE_VERSION {
         return Err(AppError::Storage(format!(
             "不支持的历史数据库版本 {version}，当前版本为 {DATABASE_VERSION}"
@@ -637,6 +659,20 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
                 person_key TEXT NOT NULL,
                 check_in TEXT,
                 record_json TEXT NOT NULL,
+                name_norm TEXT NOT NULL DEFAULT '',
+                id_no_norm TEXT NOT NULL DEFAULT '',
+                phone_norm TEXT NOT NULL DEFAULT '',
+                hotel_name_norm TEXT NOT NULL DEFAULT '',
+                hotel_province_norm TEXT NOT NULL DEFAULT '',
+                hotel_city_norm TEXT NOT NULL DEFAULT '',
+                hotel_county_norm TEXT NOT NULL DEFAULT '',
+                household_region_norm TEXT NOT NULL DEFAULT '',
+                household_province_norm TEXT NOT NULL DEFAULT '',
+                household_city_norm TEXT NOT NULL DEFAULT '',
+                household_county_norm TEXT NOT NULL DEFAULT '',
+                age INTEGER,
+                gender TEXT NOT NULL DEFAULT '',
+                search_text TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY(session_id, uid)
              );
              CREATE TABLE IF NOT EXISTS people(
@@ -685,6 +721,11 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
              CREATE INDEX IF NOT EXISTS idx_sessions_imported_at ON sessions(listed, imported_at DESC);
              CREATE INDEX IF NOT EXISTS idx_records_person ON records(session_id, person_key);
              CREATE INDEX IF NOT EXISTS idx_records_check_in ON records(session_id, check_in, uid);
+             CREATE INDEX IF NOT EXISTS idx_records_hotel_name ON records(session_id, hotel_name_norm);
+             CREATE INDEX IF NOT EXISTS idx_records_hotel_region ON records(session_id, hotel_province_norm, hotel_city_norm, hotel_county_norm);
+             CREATE INDEX IF NOT EXISTS idx_records_household ON records(session_id, household_region_norm);
+             CREATE INDEX IF NOT EXISTS idx_records_age_gender ON records(session_id, age, gender);
+             CREATE INDEX IF NOT EXISTS idx_records_search ON records(session_id, search_text);
              CREATE INDEX IF NOT EXISTS idx_people_sort ON people(session_id, score DESC, total_records DESC, name ASC, person_key ASC);
              CREATE INDEX IF NOT EXISTS idx_people_level_alert ON people(session_id, level, alert_count);
              CREATE INDEX IF NOT EXISTS idx_people_age_gender ON people(session_id, age, gender);
@@ -710,6 +751,115 @@ fn reset_legacy_database(connection: &Connection) -> Result<(), AppError> {
              PRAGMA foreign_keys = ON;",
         )
         .map_err(sql_error)
+}
+
+const RECORDS_V3_COLUMNS: [(&str, &str); 14] = [
+    ("name_norm", "TEXT NOT NULL DEFAULT ''"),
+    ("id_no_norm", "TEXT NOT NULL DEFAULT ''"),
+    ("phone_norm", "TEXT NOT NULL DEFAULT ''"),
+    ("hotel_name_norm", "TEXT NOT NULL DEFAULT ''"),
+    ("hotel_province_norm", "TEXT NOT NULL DEFAULT ''"),
+    ("hotel_city_norm", "TEXT NOT NULL DEFAULT ''"),
+    ("hotel_county_norm", "TEXT NOT NULL DEFAULT ''"),
+    ("household_region_norm", "TEXT NOT NULL DEFAULT ''"),
+    ("household_province_norm", "TEXT NOT NULL DEFAULT ''"),
+    ("household_city_norm", "TEXT NOT NULL DEFAULT ''"),
+    ("household_county_norm", "TEXT NOT NULL DEFAULT ''"),
+    ("age", "INTEGER"),
+    ("gender", "TEXT NOT NULL DEFAULT ''"),
+    ("search_text", "TEXT NOT NULL DEFAULT ''"),
+];
+
+fn migrate_records_v2_to_v3(connection: &Connection) -> Result<(), AppError> {
+    let existing_columns: HashSet<String> = {
+        let mut statement = connection
+            .prepare("PRAGMA table_info(records)")
+            .map_err(sql_error)?;
+        let mut rows = statement.query([]).map_err(sql_error)?;
+        let mut columns = HashSet::new();
+        while let Some(row) = rows.next().map_err(sql_error)? {
+            let name: String = row.get(1).map_err(sql_error)?;
+            columns.insert(name);
+        }
+        columns
+    };
+    for (column, declaration) in RECORDS_V3_COLUMNS {
+        if !existing_columns.contains(column) {
+            connection
+                .execute(
+                    &format!("ALTER TABLE records ADD COLUMN {column} {declaration}"),
+                    [],
+                )
+                .map_err(sql_error)?;
+        }
+    }
+
+    let records: Vec<(i64, Record)> = {
+        let mut statement = connection
+            .prepare("SELECT uid, record_json FROM records")
+            .map_err(sql_error)?;
+        let mut rows = statement.query([]).map_err(sql_error)?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next().map_err(sql_error)? {
+            let uid: i64 = row.get(0).map_err(sql_error)?;
+            let payload: String = row.get(1).map_err(sql_error)?;
+            result.push((uid, from_json::<Record>(&payload)?));
+        }
+        result
+    };
+
+    connection.execute_batch("BEGIN").map_err(sql_error)?;
+    {
+        let mut statement = connection
+            .prepare(
+                "UPDATE records SET \
+                 name_norm = ?2, id_no_norm = ?3, phone_norm = ?4, hotel_name_norm = ?5, \
+                 hotel_province_norm = ?6, hotel_city_norm = ?7, hotel_county_norm = ?8, \
+                 household_region_norm = ?9, household_province_norm = ?10, household_city_norm = ?11, \
+                 household_county_norm = ?12, age = ?13, gender = ?14, search_text = ?15 \
+                 WHERE uid = ?1",
+            )
+            .map_err(sql_error)?;
+        for (uid, record) in &records {
+            let search_text = normalize(
+                &[
+                    record.name.as_str(),
+                    record.id_no.as_str(),
+                    record.phone.as_str(),
+                    record.hotel_name.as_str(),
+                    record.region.as_str(),
+                    record.household_region.as_str(),
+                    record.gender.as_str(),
+                    &record
+                        .age
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                ]
+                .join(" "),
+            );
+            statement
+                .execute(params![
+                    uid,
+                    normalize(&record.name),
+                    normalize(&record.id_no),
+                    normalize(&record.phone),
+                    normalize(&record.hotel_name),
+                    normalize(&record.province),
+                    normalize(&record.city),
+                    normalize(&record.county),
+                    normalize(&record.household_region),
+                    normalize(&record.household_province),
+                    normalize(&record.household_city),
+                    normalize(&record.household_county),
+                    record.age.map(i64::from),
+                    record.gender,
+                    search_text,
+                ])
+                .map_err(sql_error)?;
+        }
+    }
+    connection.execute_batch("COMMIT").map_err(sql_error)?;
+    Ok(())
 }
 
 fn metadata_from(connection: &Connection, session_id: &str) -> Result<SessionMetadata, AppError> {
@@ -875,6 +1025,97 @@ fn build_person_filter(session_id: &str, query: &PersonQuery) -> (String, Vec<Va
                 .map(|value| Value::Text(contains_pattern(&value))),
         );
     }
+    (clauses.join(" AND "), values)
+}
+
+fn build_records_filter(
+    session_id: &str,
+    query: &ImportedRecordsQuery,
+    settings: &AnalysisSettings,
+) -> (String, Vec<Value>) {
+    let mut clauses = vec![
+        "session_id = ?".to_string(),
+        "check_in IS NOT NULL".to_string(),
+    ];
+    let mut values = vec![Value::Text(session_id.to_string())];
+    if settings.frequency_mode == FrequencyMode::Selected {
+        if let Some(start) = settings.frequency_start {
+            clauses.push("check_in >= ?".into());
+            values.push(Value::Text(start.format("%Y-%m-%d %H:%M:%S").to_string()));
+        }
+        if let Some(end) = settings.frequency_end {
+            clauses.push("check_in <= ?".into());
+            values.push(Value::Text(end.format("%Y-%m-%d %H:%M:%S").to_string()));
+        }
+    }
+
+    let search = normalize(&query.search);
+    if !search.is_empty() {
+        clauses.push("search_text LIKE ? ESCAPE '\\'".into());
+        values.push(Value::Text(contains_pattern(&search)));
+    }
+    if let Some(min_age) = query.min_age {
+        clauses.push("age >= ?".into());
+        values.push(Value::Integer(i64_from_usize(min_age)));
+    }
+    if let Some(max_age) = query.max_age {
+        clauses.push("age <= ?".into());
+        values.push(Value::Integer(i64_from_usize(max_age)));
+    }
+    if !query.gender.trim().is_empty() {
+        clauses.push("gender = ?".into());
+        values.push(Value::Text(query.gender.clone()));
+    }
+
+    for hotel in split_hotel_terms(&query.hotel_search) {
+        clauses.push("hotel_name_norm LIKE ? ESCAPE '\\'".into());
+        values.push(Value::Text(fuzzy_pattern(&hotel)));
+    }
+
+    for (column, value) in [
+        ("hotel_province_norm", normalize(&query.hotel_province)),
+        ("hotel_city_norm", normalize(&query.hotel_city)),
+        ("hotel_county_norm", normalize(&query.hotel_county)),
+    ] {
+        if value.is_empty() {
+            continue;
+        }
+        clauses.push(format!("{column} LIKE ? ESCAPE '\\'"));
+        values.push(Value::Text(contains_pattern(&value)));
+    }
+
+    for value in [
+        &query.household_province,
+        &query.household_city,
+        &query.household_county,
+    ] {
+        let value = normalize(value);
+        if !value.is_empty() {
+            clauses.push("household_region_norm LIKE ? ESCAPE '\\'".into());
+            values.push(Value::Text(contains_pattern(&value)));
+        }
+    }
+    let excluded = [
+        &query.exclude_household_province,
+        &query.exclude_household_city,
+        &query.exclude_household_county,
+    ]
+    .into_iter()
+    .map(|value| normalize(value))
+    .filter(|value| !value.is_empty())
+    .collect::<Vec<_>>();
+    if !excluded.is_empty() {
+        clauses.push(format!(
+            "NOT ({})",
+            vec!["household_region_norm LIKE ? ESCAPE '\\'"; excluded.len()].join(" AND ")
+        ));
+        values.extend(
+            excluded
+                .into_iter()
+                .map(|value| Value::Text(contains_pattern(&value))),
+        );
+    }
+
     (clauses.join(" AND "), values)
 }
 
@@ -1138,6 +1379,7 @@ mod tests {
                 &ImportedRecordsQuery {
                     page: 1,
                     page_size: 1,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -1151,6 +1393,7 @@ mod tests {
                 &ImportedRecordsQuery {
                     page: 2,
                     page_size: 1,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -1162,6 +1405,7 @@ mod tests {
                 &ImportedRecordsQuery {
                     page: 1,
                     page_size: 999,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -1176,10 +1420,222 @@ mod tests {
                 &ImportedRecordsQuery {
                     page: 1,
                     page_size: 50,
+                    ..Default::default()
                 },
             )
             .unwrap();
         assert_eq!(rolling.total, 3);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn imported_records_apply_result_filters_in_sqlite() {
+        let (root, store) = test_store();
+        let mut session = sample_session();
+        session.records = vec![
+            sample_record(1, Some(1)),
+            sample_record(2, Some(2)),
+            sample_record(3, Some(3)),
+        ];
+        session.records[1].hotel_name = "锦江城市酒店".into();
+        session.records[1].province = "四川省".into();
+        session.records[1].city = "成都市".into();
+        session.records[1].county = "锦江区".into();
+        session.records[1].region = "四川省 成都市 锦江区".into();
+        session.records[1].gender = "女".into();
+        session.records[1].age = Some(25);
+        session.records[1].name = "李四".into();
+        session.records[1].id_no = "510104199001012428".into();
+        session.records[2].household_region = "浙江省 杭州市 西湖区".into();
+        session.records[2].household_province = "浙江省".into();
+        session.records[2].household_city = "杭州市".into();
+        session.records[2].household_county = "西湖区".into();
+        store.save(&session).unwrap();
+
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    hotel_search: "锦江".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].uid, 2);
+
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    hotel_province: "四川".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].uid, 2);
+
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    household_province: "浙江".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].uid, 3);
+
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    exclude_household_province: "安徽".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].uid, 3);
+
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    min_age: Some(30),
+                    max_age: Some(40),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 2);
+
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    gender: "女".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].uid, 2);
+
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    search: "李四".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].uid, 2);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn migrates_v2_records_to_v3_with_backfilled_columns() {
+        let (root, store) = test_store();
+        store.save(&sample_session()).unwrap();
+        let drop_indexes = [
+            "idx_records_hotel_name",
+            "idx_records_hotel_region",
+            "idx_records_household",
+            "idx_records_age_gender",
+            "idx_records_search",
+        ];
+        let drop_columns = [
+            "name_norm",
+            "id_no_norm",
+            "phone_norm",
+            "hotel_name_norm",
+            "hotel_province_norm",
+            "hotel_city_norm",
+            "hotel_county_norm",
+            "household_region_norm",
+            "household_province_norm",
+            "household_city_norm",
+            "household_county_norm",
+            "age",
+            "gender",
+            "search_text",
+        ];
+        {
+            let connection = store.connection().unwrap();
+            for index in drop_indexes {
+                connection
+                    .execute(&format!("DROP INDEX IF EXISTS {index}"), [])
+                    .unwrap();
+            }
+            for column in drop_columns {
+                connection
+                    .execute(&format!("ALTER TABLE records DROP COLUMN {column}"), [])
+                    .unwrap();
+            }
+            connection
+                .execute_batch("PRAGMA user_version = 2;")
+                .unwrap();
+        }
+        drop(store);
+
+        let reopened = SessionStore::open(root.clone()).unwrap();
+        let version: i64 = reopened
+            .connection()
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, DATABASE_VERSION);
+
+        let connection = reopened.connection().unwrap();
+        let row: (String, String, Option<i64>, String) = connection
+            .query_row(
+                "SELECT hotel_name_norm, household_region_norm, age, search_text \
+                 FROM records WHERE uid = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, normalize("旅馆 A"));
+        assert_eq!(row.1, normalize("安徽省 黄山市 祁门县"));
+        assert_eq!(row.2, Some(37));
+        assert!(!row.3.is_empty());
+        assert!(row.3.contains(&normalize("测试人员1")));
+        drop(connection);
+
+        let page = reopened
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    hotel_search: "旅A".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 1);
+        drop(reopened);
+
         fs::remove_dir_all(root).unwrap();
     }
 

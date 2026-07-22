@@ -1,6 +1,6 @@
 import { demoPeople, demoSnapshot, getDemoDetail } from "../data/demo";
-import { DEFAULT_SETTINGS, type AnalysisSettings, type ExportKind, type ImportedStayRecord, type WorkspaceSnapshot } from "../domain/types";
-import { filterPeople } from "../lib/filter";
+import { DEFAULT_SETTINGS, type AnalysisSettings, type ExportKind, type ImportedRecordsPage, type ImportedRecordsQuery, type ImportedStayRecord, type WorkspaceSnapshot } from "../domain/types";
+import { filterPeople, recordMatchesImportedFilter, type ImportedRecordFilterFields } from "../lib/filter";
 import type { AppApi } from "./contract";
 
 const pause = (duration = 320) => new Promise((resolve) => window.setTimeout(resolve, duration));
@@ -36,9 +36,12 @@ function chooseBrowserFiles(directory: boolean): Promise<FileList | null> {
   });
 }
 
-function demoImportedRecord(index: number): ImportedStayRecord {
+interface DemoImportedRecord extends ImportedStayRecord, ImportedRecordFilterFields {}
+
+function demoImportedRecord(index: number): DemoImportedRecord {
   const day = String((index % 15) + 1).padStart(2, "0");
   const hour = String(8 + (index % 14)).padStart(2, "0");
+  const hotelName = index % 2 === 0 ? "阊江商务酒店" : "牯牛降宾馆";
   return {
     uid: index + 1,
     sourceFile: `演示入住数据_${Math.floor(index / 400) + 1}.xlsx`,
@@ -47,7 +50,7 @@ function demoImportedRecord(index: number): ImportedStayRecord {
     idNo: `341024198809${String(index % 100_000).padStart(5, "0")}`,
     phone: `139${String(index % 100_000_000).padStart(8, "0")}`,
     householdRegion: "安徽省 黄山市 祁门县",
-    hotelName: index % 2 === 0 ? "阊江商务酒店" : "牯牛降宾馆",
+    hotelName,
     region: "安徽省 黄山市 祁门县",
     address: "演示路 18 号",
     roomNo: String(201 + (index % 30)),
@@ -55,7 +58,28 @@ function demoImportedRecord(index: number): ImportedStayRecord {
     registerTime: `2026-07-${day} ${hour}:22`,
     checkOut: `2026-07-${day} 23:40`,
     issues: index % 17 === 0 ? ["演示数据问题"] : [],
+    hotelProvince: "安徽省",
+    hotelCity: "黄山市",
+    hotelCounty: index % 2 === 0 ? "祁门县" : "黟县",
+    hotelRegion: "安徽省 黄山市 祁门县",
+    age: 25 + (index % 40),
+    gender: index % 2 === 0 ? "男" : "女",
   };
+}
+
+let demoImportedRecordsCache: DemoImportedRecord[] | null = null;
+function allDemoImportedRecords(): DemoImportedRecord[] {
+  if (!demoImportedRecordsCache) {
+    const total = demoSnapshot.stats.records;
+    demoImportedRecordsCache = Array.from({ length: total }, (_, index) => demoImportedRecord(index));
+  }
+  return demoImportedRecordsCache;
+}
+
+function toImportedStayRecord(record: DemoImportedRecord): ImportedStayRecord {
+  const { hotelProvince, hotelCity, hotelCounty, hotelRegion, age, gender, ...rest } = record;
+  void hotelProvince; void hotelCity; void hotelCounty; void hotelRegion; void age; void gender;
+  return rest;
 }
 
 export const browserApi: AppApi = {
@@ -144,15 +168,16 @@ export const browserApi: AppApi = {
     return structuredClone(getDemoDetail(personKey));
   },
 
-  async getImportedRecords(query) {
+  async getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsPage> {
     await pause(180);
     const pageSize = Math.min(500, Math.max(1, query.pageSize));
     const page = Math.max(1, query.page);
-    const total = demoSnapshot.stats.records;
+    const filtered = allDemoImportedRecords().filter((record) => recordMatchesImportedFilter(record, query));
+    const total = filtered.length;
     const start = (page - 1) * pageSize;
     const end = Math.min(total, start + pageSize);
     return {
-      items: Array.from({ length: Math.max(0, end - start) }, (_, offset) => demoImportedRecord(start + offset)),
+      items: filtered.slice(start, end).map(toImportedStayRecord),
       total,
       page,
       pageSize,

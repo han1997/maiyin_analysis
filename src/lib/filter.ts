@@ -1,4 +1,4 @@
-import type { PersonPage, PersonQuery, PersonSummary } from "../domain/types";
+import type { ImportedRecordsQuery, PersonPage, PersonQuery, PersonSummary } from "../domain/types";
 
 export function filterPeople(people: PersonSummary[], query: PersonQuery): PersonPage {
   const keyword = query.search.trim().toLocaleLowerCase("zh-CN");
@@ -71,17 +71,17 @@ function matchesHotelRegion(person: PersonSummary, filters: string[]): boolean {
   });
 }
 
-function matchesHouseholdRegion(householdRegion: string, included: string[], excluded: string[]): boolean {
+export function matchesHouseholdRegion(householdRegion: string, included: string[], excluded: string[]): boolean {
   const value = normalize(householdRegion);
   if (!included.every((item) => value.includes(item))) return false;
   return excluded.length === 0 || !excluded.every((item) => value.includes(item));
 }
 
-function normalize(value: string): string {
+export function normalize(value: string): string {
   return value.trim().toLocaleLowerCase("zh-CN").replace(/\s+/g, "");
 }
 
-function fuzzyIncludes(value: string, query: string): boolean {
+export function fuzzyIncludes(value: string, query: string): boolean {
   if (value.includes(query)) return true;
   let index = 0;
   for (const character of value) {
@@ -89,4 +89,65 @@ function fuzzyIncludes(value: string, query: string): boolean {
     if (index === query.length) return true;
   }
   return false;
+}
+
+export interface ImportedRecordFilterFields {
+  name: string;
+  idNo: string;
+  phone: string;
+  hotelName: string;
+  hotelProvince: string;
+  hotelCity: string;
+  hotelCounty: string;
+  hotelRegion: string;
+  householdRegion: string;
+  age: number | null;
+  gender: string;
+}
+
+export function recordMatchesImportedFilter(
+  record: ImportedRecordFilterFields,
+  query: ImportedRecordsQuery,
+): boolean {
+  const hotelKeywords = splitHotelKeywords(query.hotelSearch ?? "");
+  if (hotelKeywords.length > 0) {
+    const hotelName = normalize(record.hotelName);
+    if (!hotelKeywords.every((keyword) => fuzzyIncludes(hotelName, keyword))) return false;
+  }
+  const hotelRegionFilters = [query.hotelProvince, query.hotelCity, query.hotelCounty].map((value) =>
+    normalize(value ?? ""),
+  );
+  if (hotelRegionFilters.some((value) => value)) {
+    const fields = [record.hotelProvince, record.hotelCity, record.hotelCounty];
+    if (!hotelRegionFilters.every((filter, index) => !filter || normalize(fields[index] ?? "").includes(filter))) {
+      return false;
+    }
+  }
+  const includedHouseholdFilters = [query.householdProvince, query.householdCity, query.householdCounty]
+    .map((value) => normalize(value ?? ""))
+    .filter(Boolean);
+  const excludedHouseholdFilters = [query.excludeHouseholdProvince, query.excludeHouseholdCity, query.excludeHouseholdCounty]
+    .map((value) => normalize(value ?? ""))
+    .filter(Boolean);
+  if (!matchesHouseholdRegion(record.householdRegion, includedHouseholdFilters, excludedHouseholdFilters)) {
+    return false;
+  }
+  if (query.minAge != null && (record.age == null || record.age < query.minAge)) return false;
+  if (query.maxAge != null && (record.age == null || record.age > query.maxAge)) return false;
+  if (query.gender && record.gender !== query.gender) return false;
+  const search = query.search.trim().toLocaleLowerCase("zh-CN");
+  if (!search) return true;
+  const searchable = [
+    record.name,
+    record.idNo,
+    record.phone,
+    record.hotelName,
+    record.hotelRegion,
+    record.householdRegion,
+    String(record.age ?? ""),
+    record.gender,
+  ]
+    .join(" ")
+    .toLocaleLowerCase("zh-CN");
+  return searchable.includes(search);
 }

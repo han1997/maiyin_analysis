@@ -238,6 +238,20 @@ impl From<Record> for ImportedStayRecord {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ImportedRecordsQuery {
+    pub search: String,
+    pub hotel_search: String,
+    pub hotel_province: String,
+    pub hotel_city: String,
+    pub hotel_county: String,
+    pub household_province: String,
+    pub household_city: String,
+    pub household_county: String,
+    pub exclude_household_province: String,
+    pub exclude_household_city: String,
+    pub exclude_household_county: String,
+    pub min_age: Option<usize>,
+    pub max_age: Option<usize>,
+    pub gender: String,
     pub page: usize,
     pub page_size: usize,
 }

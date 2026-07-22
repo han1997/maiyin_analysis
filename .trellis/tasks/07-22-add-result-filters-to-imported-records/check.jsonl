@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Verify ImportedRecordsQuery extended fields match contract, camelCase symmetry, serde default for legacy callers"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify schema v2->v3 migration (ALTER+backfill, no data loss), records table columns, pagination/filter query conventions"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Verify records filter draft/applied state separation, reset-to-page-1, popover close behavior, late-response handling"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Verify filter-popover disclosure tests, outside-click/Escape/mutual-exclusion, empty/no-result states"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Verify TS ImportedRecordsQuery type sync with Rust, no any-cast DTO drift"}

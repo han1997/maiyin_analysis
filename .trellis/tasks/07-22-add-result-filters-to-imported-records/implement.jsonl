@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "ImportedRecordsQuery DTO contract extension + query_imported_records cross-layer command; ensure camelCase + serde default compatibility"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite schema versioning (user_version 2->3), ALTER+backfill migration, records table columns, page-size clamping, pagination query conventions"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Filter draft vs applied query state separation, reset-to-page-1, filter-popover controlled disclosure, imported-record tab loading state"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Progressive disclosure popover patterns, outside-click/Escape/mutual-exclusion, interaction test coverage"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "ImportedRecordsQuery TS type sync with Rust serde output, camelCase DTO convention"}

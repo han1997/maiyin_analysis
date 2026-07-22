@@ -23,7 +23,7 @@ SessionStore::move_to(destination_root: PathBuf) -> Result<SessionStore, AppErro
 ```
 
 The database is `<storageRoot>/MaiyinAnalysisData/history-v1.sqlite3` and uses
-`PRAGMA user_version = 2`. The file name remains stable while `user_version`
+`PRAGMA user_version = 3`. The file name remains stable while `user_version`
 owns schema compatibility.
 
 ### 3. Contracts
@@ -32,8 +32,14 @@ owns schema compatibility.
 - `records` stores one normalized imported record per row as a JSON payload keyed by
   `(session_id, uid)`. It also stores nullable `check_in` text in
   `%Y-%m-%d %H:%M:%S` format and indexes `(session_id, check_in, uid)` so the raw view
-  can count, time-filter, sort, and page without decoding the full session. Records
-  are loaded in full only for reanalysis, merge, or export.
+  can count, time-filter, sort, and page without decoding the full session. Structured
+  filter columns (`name_norm`, `id_no_norm`, `phone_norm`, `hotel_name_norm`,
+  `hotel_province_norm`, `hotel_city_norm`, `hotel_county_norm`,
+  `household_region_norm`, `household_province_norm`, `household_city_norm`,
+  `household_county_norm`, `age`, `gender`, `search_text`) are populated from the
+  `Record` fields at save time so the imported-record view can filter in SQLite
+  without decoding `record_json`. Records are loaded in full only for reanalysis,
+  merge, or export.
 - `people` stores query columns plus one `PersonSummary` JSON payload. Normalized hotel
   names, shared-stay hotel regions, and alerts live in child tables.
 - Saves use one SQLite transaction and prepared statements. Replacing a session first
@@ -46,8 +52,11 @@ owns schema compatibility.
   match one normalized hotel row.
 - Province/city/county hotel filters are evaluated inside one correlated region row.
 - Database version `1` is explicitly cleared and rebuilt as version `2`; the user chose
-  re-import over migration. Any other nonzero unsupported `user_version` is rejected.
-  Legacy JSON session files and `index.json` are not read or migrated.
+  re-import over migration. Database version `2` is migrated in place to version `3`
+  by `ALTER TABLE` adding the structured filter columns and backfilling them from
+  `record_json`, preserving already-imported data. Any other nonzero unsupported
+  `user_version` is rejected. Legacy JSON session files and `index.json` are not read
+  or migrated.
 - Hidden combined sessions are persisted only to support paginated queries and are
   replaced by the next save, preventing unbounded transient-session accumulation.
 - Storage-root changes checkpoint WAL, copy the database through a temporary file, and
@@ -63,6 +72,7 @@ owns schema compatibility.
 | Page size below 1 or above 500 | Clamp to `1..=500` |
 | Missing record check-in | Exclude it from imported-record pages and counts |
 | Database `user_version = 1` | Drop the old application tables, create schema version `2`, and return an empty history list |
+| Database `user_version = 2` | `ALTER TABLE records` adds structured filter columns, backfills them from `record_json`, sets `user_version = 3` |
 | Destination already contains `history-v1.sqlite3` | `storage_error`; never overwrite it |
 | Legacy JSON files exist beside the database | Ignore them; do not import or delete them automatically |
 
@@ -91,6 +101,11 @@ owns schema compatibility.
   `check_in ASC, uid ASC` ordering, time boundaries, and missing-check-in exclusion.
 - Set a populated database to `user_version = 1`, reopen it, and assert history is empty
   and `user_version = 2`.
+- Set a populated database to `user_version = 2` (drop v3 columns), reopen it, and
+  assert structured filter columns are backfilled from `record_json` and
+  `user_version = 3`.
+- Assert imported-record result filters (hotel name, hotel jurisdiction, household
+  include/exclude, age range, gender, keyword search) are applied in SQLite.
 - Assert household include/exclude, age, gender, risk, alert-state, and search behavior.
 - Inject a duplicate-key save failure and assert the previous session remains intact.
 - Delete the active session and assert the next listed session becomes active.

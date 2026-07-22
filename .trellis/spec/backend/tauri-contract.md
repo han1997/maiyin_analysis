@@ -206,8 +206,13 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   `PersonQuery`; changing them calls `query_people`, not `reanalyze`, and never alters scores.
 - Threshold defaults are `3`, `3`, `12`, and `144` respectively.
 - `get_imported_records` accepts `page` and `pageSize`, performs the analysis check-in
-  boundary in SQLite, and returns only one page plus total count. Snapshots and commands
-  never transfer every raw row through IPC for ordinary browsing.
+  boundary in SQLite, and returns only one page plus total count. It also accepts
+  optional result filters (`search`, `hotelSearch`, `hotelProvince`/`City`/`County`,
+  `householdProvince`/`City`/`County` + `excludeHousehold*`, `minAge`/`maxAge`,
+  `gender`) that are applied in SQLite against structured `records` columns; it never
+  accepts `level` or `alertState` because imported records have no risk attributes.
+  All filter fields use `#[serde(default)]` so older callers omitting them keep working.
+  Snapshots and commands never transfer every raw row through IPC for ordinary browsing.
 - `PersonSummary` includes `maxWeekCount`, `maxMonthCount`, `maxYearCount`,
   `hotelNames`, and `hotelRegions`. Each hotel-region entry is
   `{ province, city, county, region }`; persisted additions use serde defaults.
@@ -216,7 +221,7 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   hotel name (AND across terms).
 - Populated province/city/county filters must match one shared `hotelRegions`
   entry; never combine components from different stays.
-- Stored session payloads use schema version `4` inside SQLite database version `2`.
+- Stored session payloads use schema version `4` inside SQLite database version `3`.
   This release starts from an empty database and provides no legacy JSON upgrade path.
 - React never computes scores. Selected-window and rolling frequency scoring
   remain mutually exclusive in Rust.
@@ -234,6 +239,7 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 | Missing check-in | Exclude from time-window analysis |
 | Old summary lacks `hotelRegions` | Deserialize to an empty list via serde default |
 | SQLite `user_version = 1` | Clear application history and initialize version `2`; the user re-imports source files |
+| SQLite `user_version = 2` | Migrate in place to version `3`: ALTER TABLE adds structured filter columns, backfills them from `record_json` |
 | Other nonzero unsupported SQLite version | `storage_error`; do not attempt an implicit migration |
 
 ### 5. Good / Base / Bad Cases
@@ -247,6 +253,8 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 - Base: no result filter is active, so SQLite counts the session and returns only the requested page.
 - Good: a 453k-row imported-record view returns 50 JSON payloads and one count instead
   of deserializing and sending all 453k rows.
+- Good: applying a hotel-name or household filter to imported records narrows the
+  SQLite query and returns one filtered page without decoding `record_json`.
 - Bad: adding province, household, age, or gender back to `AnalysisSettings`,
   because this changes the evidence set and reintroduces slow searches.
 - Bad: matching province from one stay and county from another; all populated
@@ -266,7 +274,11 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 - Hotel jurisdiction tests assert same-entry province/city/county matching.
 - Household include/exclude, age, gender, alert-state, and search behavior have SQLite query tests; browser fixtures retain matching TypeScript tests.
 - Imported-record tests cover paging, stable time order, inclusive start/end boundaries,
-  missing check-ins, and the camelCase page DTO.
+  missing check-ins, the camelCase page DTO, and result filters (hotel name, hotel
+  jurisdiction, household include/exclude, age range, gender, keyword search) applied
+  in SQLite.
+- Imported-record filter tests assert the v2→v3 schema migration backfills structured
+  columns from `record_json` and preserves already-imported data.
 - Legacy settings ignore removed analysis fields, and missing `hotelRegions` defaults safely.
 - Frontend build asserts all camelCase DTO fields.
 

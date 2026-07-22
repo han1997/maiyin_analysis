@@ -90,6 +90,20 @@ export interface ImportedStayRecord {
 }
 
 export interface ImportedRecordsQuery {
+  search: string;
+  hotelSearch?: string;
+  hotelProvince?: string;
+  hotelCity?: string;
+  hotelCounty?: string;
+  householdProvince?: string;
+  householdCity?: string;
+  householdCounty?: string;
+  excludeHouseholdProvince?: string;
+  excludeHouseholdCity?: string;
+  excludeHouseholdCounty?: string;
+  minAge?: number | null;
+  maxAge?: number | null;
+  gender?: "" | "男" | "女";
   page: number;
   pageSize: number;
 }
@@ -181,4 +195,23 @@ export const DEFAULT_SETTINGS: AnalysisSettings = {
   weekThreshold: 3,
   monthThreshold: 12,
   yearThreshold: 144,
+};
+
+export const initialRecordsQuery: ImportedRecordsQuery = {
+  search: "",
+  hotelSearch: "",
+  hotelProvince: "",
+  hotelCity: "",
+  hotelCounty: "",
+  householdProvince: "",
+  householdCity: "",
+  householdCounty: "",
+  excludeHouseholdProvince: "",
+  excludeHouseholdCity: "",
+  excludeHouseholdCounty: "",
+  minAge: null,
+  maxAge: null,
+  gender: "",
+  page: 1,
+  pageSize: 50,
 };
