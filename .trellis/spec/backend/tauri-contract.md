@@ -19,6 +19,7 @@ merge_sessions(session_ids: Vec<String>) -> Result<WorkspaceSnapshot, CommandErr
 reanalyze(settings: AnalysisSettings) -> Result<WorkspaceSnapshot, CommandError>
 query_people(query: PersonQuery) -> Result<PersonPage, CommandError>
 get_person_detail(person_key: String) -> Result<PersonDetail, CommandError>
+get_imported_records(query: ImportedRecordsQuery) -> Result<ImportedRecordsPage, CommandError>
 export_result(kind: String, path: String) -> Result<OperationResult, CommandError>
 ```
 
@@ -38,6 +39,8 @@ Response rules:
 - `WorkspaceSnapshot` contains `mode`, `stats`, `sessions`, `settings`, `importStats`, `sourceSessionIds`, and `generatedAt`; it never contains the full people collection.
 - `PersonPage` contains only `items`, `total`, `page`, and `pageSize` for the applied backend query.
 - `PersonDetail` contains one `person`, its rule `alerts`, and on-demand `evidence` rows.
+- `ImportedRecordsPage` contains only `items`, `total`, `page`, and `pageSize`; each item
+  is an `ImportedStayRecord` inside the current analysis check-in boundary.
 - `CommandError` always serializes `{ code: string, message: string }`; the UI displays `message` and does not expose Rust internals.
 - Dates crossing the boundary are strings. Rust owns parsing; TypeScript only formats valid display strings.
 - Risk `level` and alert `severity` are explicit text values. Color is presentation only.
@@ -180,12 +183,13 @@ detail evidence, result filters, imported-record views, history JSON, or exports
 ```rust
 reanalyze(settings: AnalysisSettings) -> Result<WorkspaceSnapshot, CommandError>
 query_people(query: PersonQuery) -> Result<PersonPage, CommandError>
-get_imported_records() -> Result<Vec<ImportedStayRecord>, CommandError>
+get_imported_records(query: ImportedRecordsQuery) -> Result<ImportedRecordsPage, CommandError>
 within_analysis_time_window(record: &Record, settings: &AnalysisSettings) -> bool
 ```
 
 ```ts
 appApi.queryPeople(query: PersonQuery): Promise<PersonPage>
+appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsPage>
 ```
 
 ### 3. Contracts
@@ -195,8 +199,9 @@ appApi.queryPeople(query: PersonQuery): Promise<PersonPage>
 - Hotel jurisdiction, household include/exclude, age, and gender belong to
   `PersonQuery`; changing them calls `query_people`, not `reanalyze`, and never alters scores.
 - Threshold defaults are `3`, `3`, `12`, and `144` respectively.
-- `get_imported_records` returns only records inside the analysis check-in
-  boundary; snapshots do not transfer every raw row through IPC.
+- `get_imported_records` accepts `page` and `pageSize`, performs the analysis check-in
+  boundary in SQLite, and returns only one page plus total count. Snapshots and commands
+  never transfer every raw row through IPC for ordinary browsing.
 - `PersonSummary` includes `maxWeekCount`, `maxMonthCount`, `maxYearCount`,
   `hotelNames`, and `hotelRegions`. Each hotel-region entry is
   `{ province, city, county, region }`; persisted additions use serde defaults.
@@ -205,7 +210,7 @@ appApi.queryPeople(query: PersonQuery): Promise<PersonPage>
   hotel name (AND across terms).
 - Populated province/city/county filters must match one shared `hotelRegions`
   entry; never combine components from different stays.
-- Stored session payloads use schema version `3` inside SQLite database version `1`.
+- Stored session payloads use schema version `3` inside SQLite database version `2`.
   This release starts from an empty database and provides no legacy JSON upgrade path.
 - React never computes scores. Selected-window and rolling frequency scoring
   remain mutually exclusive in Rust.
@@ -221,7 +226,8 @@ appApi.queryPeople(query: PersonQuery): Promise<PersonPage>
 | Result-filter minimum age exceeds maximum age | Frontend toast; do not update the applied query or call Rust |
 | Missing check-in | Exclude from time-window analysis |
 | Old summary lacks `hotelRegions` | Deserialize to an empty list via serde default |
-| SQLite `user_version` is nonzero and unsupported | `storage_error`; do not attempt an implicit migration |
+| SQLite `user_version = 1` | Clear application history and initialize version `2`; the user re-imports source files |
+| Other nonzero unsupported SQLite version | `storage_error`; do not attempt an implicit migration |
 
 ### 5. Good / Base / Bad Cases
 
@@ -230,6 +236,8 @@ appApi.queryPeople(query: PersonQuery): Promise<PersonPage>
 - Good: `A，B` returns only people whose hotel set fuzzy-matches both terms,
   while their Rust score and alerts remain unchanged.
 - Base: no result filter is active, so SQLite counts the session and returns only the requested page.
+- Good: a 453k-row imported-record view returns 50 JSON payloads and one count instead
+  of deserializing and sending all 453k rows.
 - Bad: adding province, household, age, or gender back to `AnalysisSettings`,
   because this changes the evidence set and reintroduces slow searches.
 - Bad: matching province from one stay and county from another; all populated
@@ -244,6 +252,8 @@ appApi.queryPeople(query: PersonQuery): Promise<PersonPage>
   multiple separators use AND semantics.
 - Hotel jurisdiction tests assert same-entry province/city/county matching.
 - Household include/exclude, age, gender, alert-state, and search behavior have SQLite query tests; browser fixtures retain matching TypeScript tests.
+- Imported-record tests cover paging, stable time order, inclusive start/end boundaries,
+  missing check-ins, and the camelCase page DTO.
 - Legacy settings ignore removed analysis fields, and missing `hotelRegions` defaults safely.
 - Frontend build asserts all camelCase DTO fields.
 
@@ -259,6 +269,7 @@ await appApi.reanalyze({ ...settings, province: "安徽省" });
 
 ```ts
 setQuery((current) => ({ ...current, hotelProvince: "安徽省", page: 1 }));
+const records = await appApi.getImportedRecords({ page: 1, pageSize: 50 });
 ```
 
 Result filters narrow the rendered `PersonSummary` collection. Only time and

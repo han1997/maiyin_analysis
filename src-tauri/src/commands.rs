@@ -1,10 +1,10 @@
-use crate::analysis::{analyze_records, within_analysis_time_window};
+use crate::analysis::analyze_records;
 use crate::error::{AppError, CommandError};
 use crate::exporter::{export_to, OperationResult};
 use crate::importer;
 use crate::model::{
-    format_datetime, AnalysisSettings, ImportedStayRecord, PersonDetail, PersonPage, PersonQuery,
-    StoredSession, WorkspaceSnapshot, CURRENT_SCHEMA_VERSION,
+    AnalysisSettings, ImportedRecordsPage, ImportedRecordsQuery, PersonDetail, PersonPage,
+    PersonQuery, StoredSession, WorkspaceSnapshot, CURRENT_SCHEMA_VERSION,
 };
 use crate::storage::{SessionMetadata, SessionStore};
 use chrono::Local;
@@ -264,23 +264,16 @@ pub async fn get_person_detail(
 
 #[tauri::command]
 pub async fn get_imported_records(
+    query: ImportedRecordsQuery,
     state: State<'_, AppState>,
-) -> Result<Vec<ImportedStayRecord>, CommandError> {
+) -> Result<ImportedRecordsPage, CommandError> {
     let (store, session_id) = current_store(&state)?;
-    let records = tauri::async_runtime::spawn_blocking(move || {
-        let settings = store.metadata(&session_id)?.settings;
-        Ok::<_, AppError>(
-            store
-                .records(&session_id)?
-                .into_iter()
-                .filter(|record| within_analysis_time_window(record, &settings))
-                .map(|record| imported_stay_record(&record))
-                .collect(),
-        )
+    let page = tauri::async_runtime::spawn_blocking(move || {
+        store.query_imported_records(&session_id, &query)
     })
     .await
     .map_err(task_error)??;
-    Ok(records)
+    Ok(page)
 }
 
 #[tauri::command]
@@ -409,26 +402,6 @@ fn validate_settings(settings: &AnalysisSettings) -> Result<(), AppError> {
         return Err(AppError::Validation("入住开始时间不能晚于结束时间".into()));
     }
     Ok(())
-}
-
-fn imported_stay_record(record: &crate::model::Record) -> ImportedStayRecord {
-    ImportedStayRecord {
-        uid: record.uid,
-        source_file: record.source_file.clone(),
-        source_row: record.source_row,
-        name: record.name.clone(),
-        id_no: record.id_no.clone(),
-        phone: record.phone.clone(),
-        household_region: record.household_region.clone(),
-        hotel_name: record.hotel_name.clone(),
-        region: record.region.clone(),
-        address: record.address.clone(),
-        room_no: record.room_no.clone(),
-        check_in: format_datetime(record.check_in),
-        register_time: format_datetime(record.register_time),
-        check_out: format_datetime(record.check_out),
-        issues: record.issues.clone(),
-    }
 }
 
 fn lock<'a>(

@@ -33,6 +33,24 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: /风险合并 Excel/ })).toBeTruthy();
   });
 
+  it("loads imported records by page and exposes accessible view tabs", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "7月上旬旅馆数据" }, { timeout: 2_000 });
+
+    const peopleTab = screen.getByRole("tab", { name: /人员研判/ });
+    const recordsTab = screen.getByRole("tab", { name: /导入记录/ });
+    expect(peopleTab.getAttribute("aria-selected")).toBe("true");
+    expect(recordsTab.getAttribute("aria-selected")).toBe("false");
+
+    fireEvent.click(recordsTab);
+    expect(recordsTab.getAttribute("aria-selected")).toBe("true");
+    expect(await screen.findByText("演示人员001")).toBeTruthy();
+    expect(screen.getByText("共 1,274 条，每页 50 条")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "导入记录下一页" }));
+    expect(await screen.findByText("演示人员051")).toBeTruthy();
+  });
+
   it("applies multi-hotel result filters without reopening analysis settings", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "7月上旬旅馆数据" }, { timeout: 2_000 });

@@ -87,6 +87,18 @@ export interface ImportedStayRecord {
   issues: string[];
 }
 
+export interface ImportedRecordsQuery {
+  page: number;
+  pageSize: number;
+}
+
+export interface ImportedRecordsPage {
+  items: ImportedStayRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 export interface PersonDetail {
   person: PersonSummary;
   alerts: AlertSummary[];

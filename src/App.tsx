@@ -6,7 +6,7 @@ import { StatStrip } from "./components/StatStrip";
 import type {
   AnalysisSettings,
   ExportKind,
-  ImportedStayRecord,
+  ImportedRecordsPage,
   PersonDetail,
   PersonPage,
   PersonQuery,
@@ -57,6 +57,13 @@ const initialPage: PersonPage = {
   pageSize: initialQuery.pageSize,
 };
 
+const initialRecordsPage: ImportedRecordsPage = {
+  items: [],
+  total: 0,
+  page: 1,
+  pageSize: 50,
+};
+
 function App() {
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot | null>(null);
   const [busy, setBusy] = useState<BusyAction>("boot");
@@ -66,7 +73,9 @@ function App() {
   const [pageLoading, setPageLoading] = useState(false);
   const [filterDraft, setFilterDraft] = useState<PersonQuery>(initialQuery);
   const [activeView, setActiveView] = useState<"people" | "records">("people");
-  const [importedRecords, setImportedRecords] = useState<ImportedStayRecord[]>([]);
+  const [recordsPage, setRecordsPage] = useState<ImportedRecordsPage>(initialRecordsPage);
+  const [recordsPageNumber, setRecordsPageNumber] = useState(1);
+  const [recordsPageLoading, setRecordsPageLoading] = useState(false);
   const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<PersonDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -129,7 +138,34 @@ function App() {
     };
   }, [snapshot, query]);
 
+  useEffect(() => {
+    if (!snapshot || snapshot.mode === "empty" || activeView !== "records") {
+      return;
+    }
+    let active = true;
+    Promise.resolve()
+      .then(() => {
+        if (!active) return null;
+        setRecordsPageLoading(true);
+        setRecordsPage((current) => ({ ...current, items: [], page: recordsPageNumber }));
+        return appApi.getImportedRecords({ page: recordsPageNumber, pageSize: initialRecordsPage.pageSize });
+      })
+      .then((nextPage) => {
+        if (active && nextPage) setRecordsPage(nextPage);
+      })
+      .catch((error: unknown) => {
+        if (active) setToast({ tone: "error", message: errorMessage(error) });
+      })
+      .finally(() => {
+        if (active) setRecordsPageLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeView, recordsPageNumber, snapshot]);
+
   const totalPages = Math.max(1, Math.ceil(page.total / page.pageSize));
+  const recordsTotalPages = Math.max(1, Math.ceil(recordsPage.total / recordsPage.pageSize));
   const activeSession = snapshot?.sessions.find((session) => session.active);
 
   async function runSnapshotAction(action: BusyAction, operation: () => Promise<WorkspaceSnapshot | null>): Promise<boolean> {
@@ -142,7 +178,8 @@ function App() {
         setDraftSettings(structuredClone(next.settings));
         setQuery((current) => ({ ...current, page: 1 }));
         setDetail(null);
-        setImportedRecords([]);
+        setRecordsPage(initialRecordsPage);
+        setRecordsPageNumber(1);
         setSelectedSessions(new Set(next.sourceSessionIds));
         return true;
       }
@@ -167,17 +204,8 @@ function App() {
     }
   }
 
-  async function openImportedRecords() {
+  function openImportedRecords() {
     setActiveView("records");
-    if (importedRecords.length > 0) return;
-    try {
-      setBusy("session");
-      setImportedRecords(await appApi.getImportedRecords());
-    } catch (error) {
-      setToast({ tone: "error", message: errorMessage(error) });
-    } finally {
-      setBusy(null);
-    }
   }
 
   function openSettings() {
@@ -407,9 +435,33 @@ function App() {
         <StatStrip stats={snapshot.stats} />
 
         {snapshot.mode !== "empty" && (
-          <nav className="workspace-tabs" aria-label="数据视图">
-            <button className={activeView === "people" ? "is-active" : ""} type="button" onClick={() => setActiveView("people")}>人员研判</button>
-            <button className={activeView === "records" ? "is-active" : ""} type="button" onClick={openImportedRecords}>导入记录 <span>{importedRecords.length || ""}</span></button>
+          <nav className="workspace-tabs" aria-label="数据视图" role="tablist">
+            <button
+              id="people-tab"
+              className={activeView === "people" ? "is-active" : ""}
+              type="button"
+              role="tab"
+              aria-controls="people-panel"
+              aria-selected={activeView === "people"}
+              onClick={() => setActiveView("people")}
+            >
+              <Icon name="users" size={15} />
+              <span className="tab-label">人员研判</span>
+              <span className="tab-count">{formatInteger(snapshot.stats.people)}</span>
+            </button>
+            <button
+              id="records-tab"
+              className={activeView === "records" ? "is-active" : ""}
+              type="button"
+              role="tab"
+              aria-controls="records-panel"
+              aria-selected={activeView === "records"}
+              onClick={openImportedRecords}
+            >
+              <Icon name="file" size={15} />
+              <span className="tab-label">导入记录</span>
+              <span className="tab-count">{formatInteger(snapshot.stats.records)}</span>
+            </button>
           </nav>
         )}
 
@@ -417,8 +469,14 @@ function App() {
           <EmptyWorkspace onFiles={() => runSnapshotAction("import", () => appApi.importFiles())} onFolder={() => runSnapshotAction("import", () => appApi.importFolder())} />
         ) : (
           activeView === "records" ? (
-            <ImportedRecordsTable records={importedRecords} showSensitive={showSensitive} />
-          ) : <section className="results-region" aria-label="人员分析结果">
+            <ImportedRecordsTable
+              page={recordsPage}
+              loading={recordsPageLoading}
+              showSensitive={showSensitive}
+              totalPages={recordsTotalPages}
+              onPageChange={setRecordsPageNumber}
+            />
+          ) : <section className="results-region" id="people-panel" role="tabpanel" aria-labelledby="people-tab" aria-label="人员分析结果">
             <div className="result-toolbar">
               <div className="search-field">
                 <Icon name="search" size={17} />
@@ -550,18 +608,30 @@ function App() {
   );
 }
 
-function TableSkeleton() {
-  return <div className="table-skeleton" role="status" aria-label="正在加载人员结果">{Array.from({ length: 6 }, (_, index) => <span key={index} />)}</div>;
+function TableSkeleton({ label = "正在加载人员结果" }: { label?: string }) {
+  return <div className="table-skeleton" role="status" aria-label={label}>{Array.from({ length: 6 }, (_, index) => <span key={index} />)}</div>;
 }
 
-function ImportedRecordsTable({ records, showSensitive }: { records: ImportedStayRecord[]; showSensitive: boolean }) {
+function ImportedRecordsTable({
+  page,
+  loading,
+  showSensitive,
+  totalPages,
+  onPageChange,
+}: {
+  page: ImportedRecordsPage;
+  loading: boolean;
+  showSensitive: boolean;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+}) {
   return (
-    <section className="results-region records-region" aria-label="导入入住记录">
-      <div className="records-heading"><div><strong>当前分析范围内的入住记录</strong><span>共 {formatInteger(records.length)} 条，时间边界和人员筛选与研判结果一致</span></div></div>
-      <div className="table-frame">
+    <section className="results-region records-region" id="records-panel" role="tabpanel" aria-labelledby="records-tab" aria-label="导入入住记录">
+      <div className="records-heading"><div><strong>当前分析时间范围内的入住记录</strong><span>共 {formatInteger(page.total)} 条，仅按入住时间边界筛选</span></div></div>
+      <div className="table-frame" aria-busy={loading}>
         <table>
           <thead><tr><th>人员</th><th>旅馆 / 房号</th><th>入住时间</th><th>退房时间</th><th>户籍地</th><th>来源</th><th>数据状态</th></tr></thead>
-          <tbody>{records.map((record) => (
+          <tbody>{page.items.map((record) => (
             <tr key={record.uid}>
               <td title={`${record.name} ${record.idNo} ${record.phone}`}><strong>{record.name || "未填"}</strong><small>{showSensitive ? record.idNo : maskIdentity(record.idNo)} · {showSensitive ? record.phone : maskPhone(record.phone)}</small></td>
               <td title={`${record.hotelName} ${record.address}`}><span className="primary-cell-text">{record.hotelName || "未填旅馆"}</span><small>房号 {record.roomNo || "未填"}</small></td>
@@ -573,8 +643,16 @@ function ImportedRecordsTable({ records, showSensitive }: { records: ImportedSta
             </tr>
           ))}</tbody>
         </table>
-        {records.length === 0 && <div className="no-results"><strong>当前分析范围内没有入住记录</strong></div>}
+        {loading && page.items.length === 0 ? <TableSkeleton label="正在加载导入记录" /> : page.items.length === 0 && <div className="no-results"><Icon name="file" size={22} /><strong>当前分析时间范围内没有入住记录</strong><span>可调整分析时间范围后重新分析。</span></div>}
       </div>
+      <footer className="table-footer">
+        <span>共 {formatInteger(page.total)} 条，每页 {page.pageSize} 条</span>
+        <div className="pagination">
+          <button className="icon-button" type="button" aria-label="导入记录上一页" disabled={loading || page.page <= 1} onClick={() => onPageChange(page.page - 1)}><Icon name="chevronLeft" /></button>
+          <span>第 {page.page} / {totalPages} 页</span>
+          <button className="icon-button" type="button" aria-label="导入记录下一页" disabled={loading || page.page >= totalPages} onClick={() => onPageChange(page.page + 1)}><Icon name="chevronRight" /></button>
+        </div>
+      </footer>
     </section>
   );
 }

@@ -1,5 +1,5 @@
 import { demoPeople, demoSnapshot, getDemoDetail } from "../data/demo";
-import { DEFAULT_SETTINGS, type AnalysisSettings, type ExportKind, type WorkspaceSnapshot } from "../domain/types";
+import { DEFAULT_SETTINGS, type AnalysisSettings, type ExportKind, type ImportedStayRecord, type WorkspaceSnapshot } from "../domain/types";
 import { filterPeople } from "../lib/filter";
 import type { AppApi } from "./contract";
 
@@ -34,6 +34,28 @@ function chooseBrowserFiles(directory: boolean): Promise<FileList | null> {
     input.addEventListener("cancel", () => resolve(null), { once: true });
     input.click();
   });
+}
+
+function demoImportedRecord(index: number): ImportedStayRecord {
+  const day = String((index % 15) + 1).padStart(2, "0");
+  const hour = String(8 + (index % 14)).padStart(2, "0");
+  return {
+    uid: index + 1,
+    sourceFile: `演示入住数据_${Math.floor(index / 400) + 1}.xlsx`,
+    sourceRow: index + 2,
+    name: `演示人员${String((index % 96) + 1).padStart(3, "0")}`,
+    idNo: `341024198809${String(index % 100_000).padStart(5, "0")}`,
+    phone: `139${String(index % 100_000_000).padStart(8, "0")}`,
+    householdRegion: "安徽省 黄山市 祁门县",
+    hotelName: index % 2 === 0 ? "阊江商务酒店" : "牯牛降宾馆",
+    region: "安徽省 黄山市 祁门县",
+    address: "演示路 18 号",
+    roomNo: String(201 + (index % 30)),
+    checkIn: `2026-07-${day} ${hour}:20`,
+    registerTime: `2026-07-${day} ${hour}:22`,
+    checkOut: `2026-07-${day} 23:40`,
+    issues: index % 17 === 0 ? ["演示数据问题"] : [],
+  };
 }
 
 export const browserApi: AppApi = {
@@ -122,9 +144,19 @@ export const browserApi: AppApi = {
     return structuredClone(getDemoDetail(personKey));
   },
 
-  async getImportedRecords() {
+  async getImportedRecords(query) {
     await pause(180);
-    return [];
+    const pageSize = Math.min(500, Math.max(1, query.pageSize));
+    const page = Math.max(1, query.page);
+    const total = demoSnapshot.stats.records;
+    const start = (page - 1) * pageSize;
+    const end = Math.min(total, start + pageSize);
+    return {
+      items: Array.from({ length: Math.max(0, end - start) }, (_, offset) => demoImportedRecord(start + offset)),
+      total,
+      page,
+      pageSize,
+    };
   },
 
   async exportResult(kind: ExportKind) {

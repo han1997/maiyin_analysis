@@ -20,6 +20,13 @@ interface PersonPage {
   page: number;
   pageSize: number;
 }
+
+interface ImportedRecordsPage {
+  items: ImportedStayRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
 ```
 
 ### 3. Contracts
@@ -34,6 +41,10 @@ interface PersonPage {
   skeleton, and disable pagination until the response finishes.
 - Browser mode uses the same API contract but applies `filterPeople` only to fixture
   data. Production React code never filters the full Tauri result collection locally.
+- The imported-record tab owns a separate page number, page DTO, and local loading state.
+  Entering the tab or changing its page requests exactly one `ImportedRecordsPage`.
+- Snapshot-changing actions reset imported records to page `1`; late responses are ignored
+  after effect cleanup just like people-page requests.
 
 ### 4. Validation & Error Matrix
 
@@ -44,12 +55,15 @@ interface PersonPage {
 | Snapshot becomes empty | Reset page state through the snapshot action and do not issue `queryPeople` |
 | User changes page while a request is active | Pagination buttons remain disabled |
 | An older request resolves after cleanup | Ignore its result |
+| Imported-record page request fails | Stop only the records skeleton, keep both view tabs usable, and show the structured error toast |
 
 ### 5. Good / Base / Bad Cases
 
 - Good: loading history renders metadata immediately, then fills the first 50 rows.
 - Good: applying `A，B` changes `query`, shows the local skeleton, and receives a page
   whose total was computed by SQLite.
+- Good: switching to imported records leaves the shell usable while a 50-row page loads;
+  switching sessions clears old rows and requests page `1`.
 - Base: browser preview waits for its fixture adapter and renders the same table shape.
 - Bad: deriving `page` with `filterPeople(snapshot.people, query)` in `App.tsx`.
 - Bad: leaving old-session rows visible while the next session page is loading.
@@ -60,6 +74,8 @@ interface PersonPage {
 - Multi-hotel application returns the matching fixture person and excludes nonmatches.
 - Invalid age ranges do not replace the applied page.
 - Loading controls expose a stable table and accessible busy status.
+- View tabs expose `tablist`, `tab`, `aria-selected`, and linked `tabpanel` semantics;
+  imported-record next-page interaction renders the next fixture page.
 - `npm test`, `npm run lint`, and `npm run build` pass after contract changes.
 
 ### 7. Wrong vs Correct

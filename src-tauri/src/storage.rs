@@ -1,7 +1,8 @@
 use crate::error::AppError;
 use crate::model::{
-    AlertSummary, AnalysisSettings, AnalysisStats, ImportStats, PersonAnalysis, PersonDetail,
-    PersonPage, PersonQuery, PersonSummary, Record, SessionSummary, StoredSession,
+    AlertSummary, AnalysisSettings, AnalysisStats, ImportStats, ImportedRecordsPage,
+    ImportedRecordsQuery, PersonAnalysis, PersonDetail, PersonPage, PersonQuery, PersonSummary,
+    Record, SessionSummary, StoredSession,
 };
 use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
@@ -10,7 +11,7 @@ use std::path::PathBuf;
 
 const DATA_FOLDER: &str = "MaiyinAnalysisData";
 const DATABASE_FILE: &str = "history-v1.sqlite3";
-const DATABASE_VERSION: i64 = 1;
+const DATABASE_VERSION: i64 = 2;
 
 #[derive(Debug, Clone)]
 pub struct SessionStore {
@@ -141,8 +142,8 @@ impl SessionStore {
         {
             let mut record_statement = transaction
                 .prepare(
-                    "INSERT INTO records(session_id, uid, person_key, record_json) \
-                     VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT INTO records(session_id, uid, person_key, check_in, record_json) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
                 )
                 .map_err(sql_error)?;
             for record in &session.records {
@@ -151,6 +152,9 @@ impl SessionStore {
                         session.session_id,
                         i64_from_u64(record.uid),
                         record.person_key,
+                        record
+                            .check_in
+                            .map(|value| value.format("%Y-%m-%d %H:%M:%S").to_string()),
                         json(record)?,
                     ])
                     .map_err(sql_error)?;
@@ -333,16 +337,6 @@ impl SessionStore {
         })
     }
 
-    pub fn records(&self, session_id: &str) -> Result<Vec<Record>, AppError> {
-        let connection = self.connection()?;
-        ensure_session_exists(&connection, session_id)?;
-        load_json_column(
-            &connection,
-            "SELECT record_json FROM records WHERE session_id = ?1 ORDER BY uid",
-            session_id,
-        )
-    }
-
     pub fn query_people(
         &self,
         session_id: &str,
@@ -381,6 +375,67 @@ impl SessionStore {
             items.push(from_json(&payload)?);
         }
         Ok(PersonPage {
+            items,
+            total: usize_from_i64(total),
+            page,
+            page_size,
+        })
+    }
+
+    pub fn query_imported_records(
+        &self,
+        session_id: &str,
+        query: &ImportedRecordsQuery,
+    ) -> Result<ImportedRecordsPage, AppError> {
+        let connection = self.connection()?;
+        ensure_session_exists(&connection, session_id)?;
+        let settings = metadata_from(&connection, session_id)?.settings;
+        let page_size = query.page_size.clamp(1, 500);
+        let page = query.page.max(1).min(usize_from_i64(i64::MAX) / page_size);
+        let mut clauses = vec![
+            "session_id = ?".to_string(),
+            "check_in IS NOT NULL".to_string(),
+        ];
+        let mut values = vec![Value::Text(session_id.to_string())];
+        if let Some(start) = settings.frequency_start {
+            clauses.push("check_in >= ?".into());
+            values.push(Value::Text(start.format("%Y-%m-%d %H:%M:%S").to_string()));
+        }
+        if let Some(end) = settings.frequency_end {
+            clauses.push("check_in <= ?".into());
+            values.push(Value::Text(end.format("%Y-%m-%d %H:%M:%S").to_string()));
+        }
+        let where_sql = clauses.join(" AND ");
+        let total: i64 = connection
+            .query_row(
+                &format!("SELECT COUNT(*) FROM records WHERE {where_sql}"),
+                params_from_iter(values.iter()),
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+
+        let mut paged_values = values;
+        paged_values.push(Value::Integer(i64_from_usize(page_size)));
+        paged_values.push(Value::Integer(i64_from_usize(
+            (page - 1).saturating_mul(page_size),
+        )));
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT record_json FROM records WHERE {where_sql} \
+                 ORDER BY check_in ASC, uid ASC LIMIT ? OFFSET ?"
+            ))
+            .map_err(sql_error)?;
+        let mut rows = statement
+            .query(params_from_iter(paged_values.iter()))
+            .map_err(sql_error)?;
+        let mut items = Vec::new();
+        while let Some(row) = rows.next().map_err(sql_error)? {
+            let payload: String = row.get(0).map_err(sql_error)?;
+            items.push(crate::model::ImportedStayRecord::from(from_json::<Record>(
+                &payload,
+            )?));
+        }
+        Ok(ImportedRecordsPage {
             items,
             total: usize_from_i64(total),
             page,
@@ -543,7 +598,9 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(sql_error)?;
-    if version != 0 && version != DATABASE_VERSION {
+    if version == 1 {
+        reset_legacy_database(connection)?;
+    } else if version != 0 && version != DATABASE_VERSION {
         return Err(AppError::Storage(format!(
             "不支持的历史数据库版本 {version}，当前版本为 {DATABASE_VERSION}"
         )));
@@ -576,6 +633,7 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
                 session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
                 uid INTEGER NOT NULL,
                 person_key TEXT NOT NULL,
+                check_in TEXT,
                 record_json TEXT NOT NULL,
                 PRIMARY KEY(session_id, uid)
              );
@@ -624,6 +682,7 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
              );
              CREATE INDEX IF NOT EXISTS idx_sessions_imported_at ON sessions(listed, imported_at DESC);
              CREATE INDEX IF NOT EXISTS idx_records_person ON records(session_id, person_key);
+             CREATE INDEX IF NOT EXISTS idx_records_check_in ON records(session_id, check_in, uid);
              CREATE INDEX IF NOT EXISTS idx_people_sort ON people(session_id, score DESC, total_records DESC, name ASC, person_key ASC);
              CREATE INDEX IF NOT EXISTS idx_people_level_alert ON people(session_id, level, alert_count);
              CREATE INDEX IF NOT EXISTS idx_people_age_gender ON people(session_id, age, gender);
@@ -631,6 +690,23 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
              CREATE INDEX IF NOT EXISTS idx_person_regions_lookup ON person_hotel_regions(session_id, person_key);
              PRAGMA user_version = {DATABASE_VERSION};"
         ))
+        .map_err(sql_error)
+}
+
+fn reset_legacy_database(connection: &Connection) -> Result<(), AppError> {
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             DROP TABLE IF EXISTS person_hotel_regions;
+             DROP TABLE IF EXISTS person_hotels;
+             DROP TABLE IF EXISTS alerts;
+             DROP TABLE IF EXISTS people;
+             DROP TABLE IF EXISTS records;
+             DROP TABLE IF EXISTS sessions;
+             DROP TABLE IF EXISTS app_meta;
+             PRAGMA user_version = 0;
+             PRAGMA foreign_keys = ON;",
+        )
         .map_err(sql_error)
 }
 
@@ -954,7 +1030,7 @@ mod tests {
             imported_at: "2026-07-22T10:00:00+08:00".into(),
             file_count: 1,
             settings: AnalysisSettings::default(),
-            records: vec![],
+            records: vec![sample_record(1, Some(1))],
             analyses: vec![PersonAnalysis {
                 summary,
                 alerts: vec![],
@@ -969,6 +1045,47 @@ mod tests {
             },
             source_session_ids: vec![],
             is_combined: false,
+        }
+    }
+
+    fn sample_record(uid: u64, day: Option<u32>) -> Record {
+        let check_in = day.map(|value| {
+            chrono::NaiveDate::from_ymd_opt(2026, 7, value)
+                .unwrap()
+                .and_hms_opt(10, 0, 0)
+                .unwrap()
+        });
+        Record {
+            uid,
+            source_file: "test.xlsx".into(),
+            source_row: usize::try_from(uid).unwrap_or(1) + 1,
+            name: format!("测试人员{uid}"),
+            id_no: format!("34102419880912{uid:04}"),
+            phone: "13905591234".into(),
+            hotel_name: "旅馆 A".into(),
+            province: "安徽省".into(),
+            city: "黄山市".into(),
+            county: "祁门县".into(),
+            region: "安徽省 黄山市 祁门县".into(),
+            address: "测试路 1 号".into(),
+            room_no: "201".into(),
+            check_in_text: check_in
+                .map(|value| value.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_default(),
+            register_time_text: String::new(),
+            check_out_text: String::new(),
+            check_in,
+            register_time: None,
+            check_out: None,
+            person_key: "id:1".into(),
+            household_province: "安徽省".into(),
+            household_city: "黄山市".into(),
+            household_county: "祁门县".into(),
+            household_region: "安徽省 黄山市 祁门县".into(),
+            household_address: String::new(),
+            age: Some(37),
+            gender: "男".into(),
+            issues: vec![],
         }
     }
 
@@ -988,8 +1105,87 @@ mod tests {
         store.save(&sample_session()).unwrap();
         let loaded = store.load("session-1").unwrap();
         assert_eq!(loaded.analyses.len(), 1);
+        assert_eq!(loaded.records.len(), 1);
         assert_eq!(store.list().unwrap().len(), 1);
         assert_eq!(store.query_people("session-1", &query()).unwrap().total, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn imported_records_are_time_filtered_sorted_and_paginated_in_sqlite() {
+        let (root, store) = test_store();
+        let mut session = sample_session();
+        session.records = vec![
+            sample_record(1, Some(1)),
+            sample_record(2, Some(5)),
+            sample_record(3, Some(10)),
+            sample_record(4, None),
+        ];
+        session.settings.frequency_start = chrono::NaiveDate::from_ymd_opt(2026, 7, 2)
+            .unwrap()
+            .and_hms_opt(0, 0, 0);
+        session.settings.frequency_end = chrono::NaiveDate::from_ymd_opt(2026, 7, 10)
+            .unwrap()
+            .and_hms_opt(23, 59, 59);
+        store.save(&session).unwrap();
+
+        let first = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    page: 1,
+                    page_size: 1,
+                },
+            )
+            .unwrap();
+        assert_eq!(first.total, 2);
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.items[0].uid, 2);
+
+        let second = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    page: 2,
+                    page_size: 1,
+                },
+            )
+            .unwrap();
+        assert_eq!(second.items[0].uid, 3);
+
+        let clamped = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    page: 1,
+                    page_size: 999,
+                },
+            )
+            .unwrap();
+        assert_eq!(clamped.page_size, 500);
+        assert_eq!(clamped.items.len(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn version_one_database_is_cleared_instead_of_migrated() {
+        let (root, store) = test_store();
+        store.save(&sample_session()).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch("PRAGMA user_version = 1;")
+            .unwrap();
+        drop(store);
+
+        let rebuilt = SessionStore::open(root.clone()).unwrap();
+        assert!(rebuilt.list().unwrap().is_empty());
+        let version: i64 = rebuilt
+            .connection()
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, DATABASE_VERSION);
         fs::remove_dir_all(root).unwrap();
     }
 

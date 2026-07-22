@@ -151,6 +151,44 @@ pub struct ImportedStayRecord {
     pub issues: Vec<String>,
 }
 
+impl From<Record> for ImportedStayRecord {
+    fn from(record: Record) -> Self {
+        Self {
+            uid: record.uid,
+            source_file: record.source_file,
+            source_row: record.source_row,
+            name: record.name,
+            id_no: record.id_no,
+            phone: record.phone,
+            household_region: record.household_region,
+            hotel_name: record.hotel_name,
+            region: record.region,
+            address: record.address,
+            room_no: record.room_no,
+            check_in: format_datetime(record.check_in),
+            register_time: format_datetime(record.register_time),
+            check_out: format_datetime(record.check_out),
+            issues: record.issues,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ImportedRecordsQuery {
+    pub page: usize,
+    pub page_size: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedRecordsPage {
+    pub items: Vec<ImportedStayRecord>,
+    pub total: usize,
+    pub page: usize,
+    pub page_size: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonDetail {

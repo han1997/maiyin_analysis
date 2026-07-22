@@ -2,7 +2,8 @@ import type {
   AnalysisSettings,
   ExportKind,
   OperationResult,
-  ImportedStayRecord,
+  ImportedRecordsPage,
+  ImportedRecordsQuery,
   PersonDetail,
   PersonPage,
   PersonQuery,
@@ -21,7 +22,7 @@ export interface AppApi {
   reanalyze(settings: AnalysisSettings): Promise<WorkspaceSnapshot>;
   queryPeople(query: PersonQuery): Promise<PersonPage>;
   getPersonDetail(personKey: string): Promise<PersonDetail>;
-  getImportedRecords(): Promise<ImportedStayRecord[]>;
+  getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsPage>;
   exportResult(kind: ExportKind): Promise<OperationResult>;
   chooseStorageDirectory(): Promise<OperationResult | null>;
 }
