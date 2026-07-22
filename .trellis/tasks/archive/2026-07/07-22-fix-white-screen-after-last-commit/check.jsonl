@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify v2->v3 clear-and-rebuild matches the storage version contract."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Apply backend quality standards when reviewing."}
+{"file": ".trellis/tasks/07-22-fix-white-screen-after-last-commit/prd.md", "reason": "Final acceptance criteria to verify against."}
