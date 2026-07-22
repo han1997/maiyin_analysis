@@ -339,3 +339,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: 为导入记录增加结果筛选功能
+
+**Date**: 2026-07-22
+**Task**: 为导入记录增加结果筛选功能
+**Branch**: `main`
+
+### Summary
+
+为 ImportedRecordsQuery 扩展 search/hotelSearch/hotel辖区/household含排除/age/gender 筛选字段；records 表 schema v2→v3 ALTER 加结构化列并从 record_json 回填，保存路径同步填充新列；query_imported_records 复用 normalize/fuzzy/contains/split_hotel_terms 工具在 SQLite 层筛选；前端导入记录 tab 新增 filter-popover 草稿→应用→回第 1 页交互，复用人员研判弹窗外部点击/Escape/互斥关闭；browser fixture 适配器同步筛选；补 Rust 筛选与迁移测试 + 前端交互测试；更新跨层契约与数据库规范。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e6360f1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
