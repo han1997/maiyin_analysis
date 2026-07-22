@@ -16,6 +16,7 @@ import_paths(paths: Vec<String>) -> Result<WorkspaceSnapshot, CommandError>
 import_folders(paths: Vec<String>) -> Result<WorkspaceSnapshot, CommandError>
 load_session(session_id: String) -> Result<WorkspaceSnapshot, CommandError>
 merge_sessions(session_ids: Vec<String>) -> Result<WorkspaceSnapshot, CommandError>
+delete_session(session_id: String) -> Result<WorkspaceSnapshot, CommandError>
 reanalyze(settings: AnalysisSettings) -> Result<WorkspaceSnapshot, CommandError>
 query_people(query: PersonQuery) -> Result<PersonPage, CommandError>
 get_person_detail(person_key: String) -> Result<PersonDetail, CommandError>
@@ -51,6 +52,11 @@ Storage rules:
 - `storage.json` under the Tauri app-data directory remembers a user-selected storage root.
 - Startup does not automatically show the last session. SQLite metadata is read for history, and the user explicitly loads a session.
 - Legacy JSON history is not migrated or read; users re-import the original source files.
+- `delete_session` is an async Tauri command. It dispatches SQLite/file cleanup to
+  `spawn_blocking`, then returns a fresh snapshot with the next listed session active (or
+  an empty workspace). The UI must remain responsive while the delete is running.
+- The backend only removes the database file when the target is the final listed session;
+  otherwise it preserves the shared database and deletes the target's rows/FTS documents.
 
 ### 4. Validation & Error Matrix
 
@@ -63,6 +69,8 @@ Storage rules:
 | Invalid time range or threshold | `validation_error` | Keep parameter panel open and identify the field |
 | Result-filter minimum age exceeds maximum age | No Rust call | Keep the current list and show a validation toast |
 | Missing session/person | `session_not_found` or `validation_error` | Show a retryable error, never crash the shell |
+| Delete target is missing | `session_not_found` | Keep the current snapshot and show the structured error |
+| Delete final listed session | Success with empty `WorkspaceSnapshot` | Clear current results and history selection |
 | Export path canceled | No Rust call | Show a cancellation message without error styling |
 | Legacy `.xls` text differs from reference | Compatibility failure | Do not claim parity; route only `.xls` through a future narrow adapter |
 
@@ -72,13 +80,19 @@ Storage rules:
 - Base: browser preview calls the same `AppApi` method and returns clearly labeled demo data without reading file bytes.
 - Bad: React filters a subset and invents a new risk score that differs from Rust, or transfers each spreadsheet row through IPC.
 - Good: `get_person_detail` returns evidence only for the selected person and the UI opens a right-side inspector.
+- Good: deleting a large session sets the React `delete` busy state while Rust performs
+  file/row cleanup on a blocking worker, then replaces the snapshot exactly once.
 - Bad: logs or toasts include full identity numbers, phone numbers, or raw workbook contents.
+- Bad: running the large SQLite delete synchronously inside the Tauri command handler, or
+  deleting `history-v1.sqlite3` when another listed session must remain.
 
 ### 6. Tests Required
 
 - Rust unit tests for overlap requiring different hotel/room, same-day non-overlap count, rolling 30/365-day thresholds, score caps, and risk level boundaries.
 - Rust importer tests for title rows before headers, fixed template positions, decorated headers, inferred id/time columns, compact/Excel/text dates, short-stay and duplicate exclusion, and CSV BOM/GBK decoding.
 - Rust storage tests for SQLite round-trip, paginated filters, transaction rollback, active-session deletion, and storage-root copying.
+- Rust storage/command tests for final-session file reset, FTS rowid cleanup, missing-session
+  errors, and keeping other sessions after deletion.
 - Export tests for UTF-8 BOM, full identity values, formula-injection prefixing, and risk workbook rows.
 - TypeScript tests for search across identity/household/alert text, level/alert filters, and first render of browser preview.
 - Cross-layer assertions must verify camelCase DTO fields and structured `{ code, message }` errors.

@@ -45,6 +45,9 @@ interface ImportedRecordsPage {
   Entering the tab or changing its page requests exactly one `ImportedRecordsPage`.
 - Snapshot-changing actions reset imported records to page `1`; late responses are ignored
   after effect cleanup just like people-page requests.
+- Session deletion is a snapshot-changing action: keep the `delete` busy state until the
+  async Tauri command resolves, disable competing session actions, and replace the shell
+  with the returned snapshot (empty when the final listed session was removed).
 - People and imported-record page-size controls offer exactly `50`, `100`, and `200`,
   default to `50`, and reset only their own page number to `1`. Result-filter application
   and clearing preserve the chosen people page size.

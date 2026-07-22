@@ -388,7 +388,7 @@ function App() {
           <button className="button button-quiet" type="button" onClick={() => exportResult("template_xlsx")}>
             <Icon name="download" /> 下载导入模板
           </button>
-          <button className="button button-danger-quiet" type="button" onClick={() => runSnapshotAction("session", () => appApi.clearWorkspace())}>
+          <button className="button button-danger-quiet" type="button" disabled={busy !== null} onClick={() => runSnapshotAction("session", () => appApi.clearWorkspace())}>
             <Icon name="trash" /> 清空工作区
           </button>
         </div>
@@ -434,12 +434,14 @@ function App() {
                 <input
                   type="checkbox"
                   checked={selectedSessions.has(session.sessionId)}
+                  disabled={busy !== null}
                   onChange={() => toggleSession(session.sessionId)}
                 />
                 <span className="custom-checkbox" aria-hidden="true" />
                 <button
                   type="button"
                   className="history-content"
+                  disabled={busy !== null}
                   onClick={(event) => {
                     event.preventDefault();
                     void runSnapshotAction("session", () => appApi.loadSession(session.sessionId));
@@ -460,9 +462,15 @@ function App() {
             <Icon name="archive" /> 合并所选 {selectedSessions.size > 1 ? `${selectedSessions.size} 条` : ""}
           </button>
           {activeSession && (
-            <button className="text-button danger-text" type="button" onClick={() => setConfirmDelete(true)}>
+            <button className="text-button danger-text" type="button" disabled={busy !== null} onClick={() => setConfirmDelete(true)}>
               删除当前历史会话
             </button>
+          )}
+          {busy === "delete" && (
+            <div className="inline-progress" role="status" aria-label="正在删除历史会话，请稍候…">
+              <span className="progress-track"><span /></span>
+              <p>正在删除历史会话，请稍候…</p>
+            </div>
           )}
         </section>
 
@@ -474,7 +482,7 @@ function App() {
             <div><dt>入住时间</dt><dd>{analysisTimeScopeLabel(snapshot.settings)}</dd></div>
             <div><dt>频次规则</dt><dd>{frequencyScopeLabel(snapshot.settings)}</dd></div>
           </dl>
-          <button className="button button-secondary full-width" type="button" onClick={openSettings}>
+          <button className="button button-secondary full-width" type="button" disabled={busy !== null} onClick={openSettings}>
             <Icon name="settings" /> 调整分析参数
           </button>
         </section>

@@ -195,12 +195,14 @@ pub async fn merge_sessions(
 }
 
 #[tauri::command]
-pub fn delete_session(
+pub async fn delete_session(
     session_id: String,
     state: State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, CommandError> {
     let store = { lock(&state)?.store.clone() };
-    let current = store.delete(&session_id)?;
+    let current = tauri::async_runtime::spawn_blocking(move || store.delete(&session_id))
+        .await
+        .map_err(task_error)??;
     let mut backend = lock(&state)?;
     backend.current = current;
     Ok(snapshot(&backend)?)

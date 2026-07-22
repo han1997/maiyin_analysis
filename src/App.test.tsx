@@ -15,6 +15,18 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: /查看 周明远 详情/ })).toBeTruthy();
   });
 
+  it("shows delete progress and clears the workspace after confirmation", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "7月上旬旅馆数据" }, { timeout: 2_000 });
+
+    fireEvent.click(screen.getByRole("button", { name: "删除当前历史会话" }));
+    const dialog = screen.getByRole("alertdialog", { name: "删除当前历史会话" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+
+    expect(screen.getByRole("status", { name: "正在删除历史会话，请稍候…" })).toBeTruthy();
+    expect(await screen.findByText("尚未载入数据")).toBeTruthy();
+  });
+
   it("keeps secondary filters and export formats behind clear entry points", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "7月上旬旅馆数据" }, { timeout: 2_000 });

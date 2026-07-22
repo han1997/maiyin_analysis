@@ -4,19 +4,31 @@ use crate::model::{
     ImportedRecordsQuery, PersonAnalysis, PersonDetail, PersonPage, PersonQuery, PersonSummary,
     Record, SessionSummary, StoredSession,
 };
-use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension};
+use rusqlite::{
+    params, params_from_iter, types::Value, Connection, OptionalExtension, Transaction,
+};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 const DATA_FOLDER: &str = "MaiyinAnalysisData";
 const DATABASE_FILE: &str = "history-v1.sqlite3";
 const DATABASE_VERSION: i64 = 4;
+const EMPTY_DATABASE_RESET_THRESHOLD_BYTES: u64 = 8 * 1024 * 1024;
+const SESSION_FTS_TABLES: [(&str, &str); 4] = [
+    ("records_search_fts", "records"),
+    ("people_search_fts", "people"),
+    ("records_hotel_name_fts", "records"),
+    ("person_hotels_name_fts", "person_hotels"),
+];
 
 #[derive(Debug, Clone)]
 pub struct SessionStore {
     storage_root: PathBuf,
     database_path: PathBuf,
+    access_lock: Arc<RwLock<()>>,
 }
 
 #[derive(Debug, Clone)]
@@ -40,13 +52,29 @@ impl SessionStore {
         let store = Self {
             storage_root,
             database_path: data_dir.join(DATABASE_FILE),
+            access_lock: Arc::new(RwLock::new(())),
         };
         let connection = store.connection()?;
         initialize_schema(&connection)?;
+        let session_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .map_err(sql_error)?;
+        drop(connection);
+        // Older delete paths could leave a multi-gigabyte empty file and orphaned FTS pages.
+        // Rebuild only clearly oversized empty databases; failure is non-fatal at startup.
+        if session_count == 0
+            && fs::metadata(&store.database_path)
+                .map_err(storage_error)?
+                .len()
+                > EMPTY_DATABASE_RESET_THRESHOLD_BYTES
+        {
+            let _ = store.reset_database_file();
+        }
         Ok(store)
     }
 
     pub fn list(&self) -> Result<Vec<SessionSummary>, AppError> {
+        let _read_guard = self.lock_reads()?;
         let connection = self.connection()?;
         let active_id = active_id_from(&connection)?.unwrap_or_default();
         let mut statement = connection
@@ -75,16 +103,15 @@ impl SessionStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(sql_error)
     }
 
-    pub fn active_id(&self) -> Result<Option<String>, AppError> {
-        active_id_from(&self.connection()?)
-    }
-
+    #[allow(dead_code)]
     pub fn metadata(&self, session_id: &str) -> Result<SessionMetadata, AppError> {
+        let _read_guard = self.lock_reads()?;
         let connection = self.connection()?;
         metadata_from(&connection, session_id)
     }
 
     pub fn activate(&self, session_id: &str) -> Result<SessionMetadata, AppError> {
+        let _write_guard = self.lock_writes()?;
         let connection = self.connection()?;
         let metadata = metadata_from(&connection, session_id)?;
         connection
@@ -98,8 +125,21 @@ impl SessionStore {
     }
 
     pub fn save(&self, session: &StoredSession) -> Result<SessionMetadata, AppError> {
+        let _write_guard = self.lock_writes()?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction().map_err(sql_error)?;
+        let stale_combined_session_ids = {
+            let mut statement = transaction
+                .prepare("SELECT session_id FROM sessions WHERE listed = 0 AND session_id <> ?1")
+                .map_err(sql_error)?;
+            let rows = statement
+                .query_map([&session.session_id], |row| row.get::<_, String>(0))
+                .map_err(sql_error)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(sql_error)?
+        };
+        for stale_session_id in &stale_combined_session_ids {
+            delete_session_fts_rows(&transaction, stale_session_id)?;
+        }
         transaction
             .execute(
                 "DELETE FROM sessions WHERE listed = 0 AND session_id <> ?1",
@@ -108,18 +148,7 @@ impl SessionStore {
             .map_err(sql_error)?;
         // Contentless FTS5 virtual tables have no FK back to records/people, so they don't
         // cascade; clear any stale rows for this session before re-inserting.
-        transaction
-            .execute(
-                "DELETE FROM records_search_fts WHERE session_id = ?1",
-                [&session.session_id],
-            )
-            .map_err(sql_error)?;
-        transaction
-            .execute(
-                "DELETE FROM people_search_fts WHERE session_id = ?1",
-                [&session.session_id],
-            )
-            .map_err(sql_error)?;
+        delete_session_fts_rows(&transaction, &session.session_id)?;
         transaction
             .execute(
                 "DELETE FROM sessions WHERE session_id = ?1",
@@ -423,10 +452,11 @@ impl SessionStore {
                 .map_err(sql_error)?;
         }
         transaction.commit().map_err(sql_error)?;
-        self.metadata(&session.session_id)
+        metadata_from(&connection, &session.session_id)
     }
 
     pub fn load(&self, session_id: &str) -> Result<StoredSession, AppError> {
+        let _read_guard = self.lock_reads()?;
         let connection = self.connection()?;
         let metadata = metadata_from(&connection, session_id)?;
 
@@ -492,6 +522,7 @@ impl SessionStore {
         session_id: &str,
         query: &PersonQuery,
     ) -> Result<PersonPage, AppError> {
+        let _read_guard = self.lock_reads()?;
         let connection = self.connection()?;
         ensure_session_exists(&connection, session_id)?;
         let page_size = query.page_size.clamp(1, 500);
@@ -535,6 +566,7 @@ impl SessionStore {
         session_id: &str,
         query: &ImportedRecordsQuery,
     ) -> Result<ImportedRecordsPage, AppError> {
+        let _read_guard = self.lock_reads()?;
         let connection = self.connection()?;
         let settings = settings_for_session(&connection, session_id)?;
         let page_size = query.page_size.clamp(1, 500);
@@ -589,6 +621,7 @@ impl SessionStore {
         session_id: &str,
         person_key: &str,
     ) -> Result<PersonDetail, AppError> {
+        let _read_guard = self.lock_reads()?;
         let connection = self.connection()?;
         let summary_payload: Option<String> = connection
             .query_row(
@@ -652,8 +685,44 @@ impl SessionStore {
     }
 
     pub fn delete(&self, session_id: &str) -> Result<Option<SessionMetadata>, AppError> {
+        let _write_guard = self.lock_writes()?;
+        let connection = self.connection()?;
+        let remaining_listed_sessions: Option<i64> = connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM sessions WHERE listed = 1 AND session_id <> ?1) \
+                        FROM sessions WHERE session_id = ?1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let Some(remaining_listed_sessions) = remaining_listed_sessions else {
+            return Err(AppError::SessionNotFound);
+        };
+        drop(connection);
+
+        if remaining_listed_sessions == 0 && self.reset_database_file().is_ok() {
+            return Ok(None);
+        }
+
         let mut connection = self.connection()?;
         let transaction = connection.transaction().map_err(sql_error)?;
+        delete_session_fts_rows(&transaction, session_id)?;
+        for table in [
+            "alerts",
+            "person_hotels",
+            "person_hotel_regions",
+            "record_filter_counts",
+            "records",
+            "people",
+        ] {
+            transaction
+                .execute(
+                    &format!("DELETE FROM {table} WHERE session_id = ?1"),
+                    [session_id],
+                )
+                .map_err(sql_error)?;
+        }
         let deleted = transaction
             .execute("DELETE FROM sessions WHERE session_id = ?1", [session_id])
             .map_err(sql_error)?;
@@ -691,12 +760,13 @@ impl SessionStore {
             }
         }
         transaction.commit().map_err(sql_error)?;
-        self.active_id()?
-            .map(|active| self.metadata(&active))
+        active_id_from(&connection)?
+            .map(|active| metadata_from(&connection, &active))
             .transpose()
     }
 
     pub fn move_to(&self, destination_root: PathBuf) -> Result<Self, AppError> {
+        let _write_guard = self.lock_writes()?;
         if destination_root == self.storage_root {
             return Ok(self.clone());
         }
@@ -732,6 +802,83 @@ impl SessionStore {
             )
             .map_err(sql_error)?;
         Ok(connection)
+    }
+
+    fn lock_reads(&self) -> Result<RwLockReadGuard<'_, ()>, AppError> {
+        self.access_lock
+            .read()
+            .map_err(|_| AppError::Storage("SQLite 访问锁不可用，请重启应用后重试".into()))
+    }
+
+    fn lock_writes(&self) -> Result<RwLockWriteGuard<'_, ()>, AppError> {
+        self.access_lock
+            .write()
+            .map_err(|_| AppError::Storage("SQLite 写入锁不可用，请重启应用后重试".into()))
+    }
+
+    fn reset_database_file(&self) -> Result<(), AppError> {
+        if self.database_path.exists() {
+            let connection = self.connection()?;
+            connection
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .map_err(sql_error)?;
+            drop(connection);
+        }
+
+        for suffix in ["-wal", "-shm", "-journal"] {
+            remove_file_if_exists(&self.database_sidecar_path(suffix))?;
+        }
+        remove_file_if_exists(&self.database_path)?;
+
+        let connection = self.connection()?;
+        initialize_schema(&connection)
+    }
+
+    fn database_sidecar_path(&self, suffix: &str) -> PathBuf {
+        let file_name = self
+            .database_path
+            .file_name()
+            .map(|value| value.to_string_lossy())
+            .unwrap_or_default();
+        self.database_path
+            .with_file_name(format!("{file_name}{suffix}"))
+    }
+}
+
+fn delete_session_fts_rows(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+) -> Result<(), AppError> {
+    // Contentless FTS tables cannot reliably return their UNINDEXED session_id value.
+    // Delete by the mirrored content-table rowid while those source rows still exist.
+    for (fts_table, content_table) in SESSION_FTS_TABLES {
+        let exists = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                [fts_table],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(sql_error)?;
+        if exists {
+            transaction
+                .execute(
+                    &format!(
+                        "DELETE FROM {fts_table} WHERE rowid IN (\
+                         SELECT rowid FROM {content_table} WHERE session_id = ?1)"
+                    ),
+                    [session_id],
+                )
+                .map_err(sql_error)?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<(), AppError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(storage_error(error)),
     }
 }
 
@@ -2250,8 +2397,175 @@ mod tests {
         second.session_id = "session-2".into();
         second.imported_at = "2026-07-22T11:00:00+08:00".into();
         store.save(&second).unwrap();
+        let connection = store.connection().unwrap();
+        let session_one_record_rowid: i64 = connection
+            .query_row(
+                "SELECT rowid FROM records WHERE session_id = 'session-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let session_two_record_rowid: i64 = connection
+            .query_row(
+                "SELECT rowid FROM records WHERE session_id = 'session-2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let session_one_person_rowid: i64 = connection
+            .query_row(
+                "SELECT rowid FROM people WHERE session_id = 'session-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let session_two_person_rowid: i64 = connection
+            .query_row(
+                "SELECT rowid FROM people WHERE session_id = 'session-2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(connection);
+
         let active = store.delete("session-2").unwrap().unwrap();
         assert_eq!(active.session_id, "session-1");
+        let connection = store.connection().unwrap();
+        for (table, remaining_rowid, deleted_rowid) in [
+            (
+                "records_search_fts",
+                session_one_record_rowid,
+                session_two_record_rowid,
+            ),
+            (
+                "people_search_fts",
+                session_one_person_rowid,
+                session_two_person_rowid,
+            ),
+        ] {
+            let deleted_exists: bool = connection
+                .query_row(
+                    &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE rowid = ?1)"),
+                    [deleted_rowid],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let remaining_exists: bool = connection
+                .query_row(
+                    &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE rowid = ?1)"),
+                    [remaining_rowid],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(!deleted_exists);
+            assert!(remaining_exists);
+        }
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deleting_a_missing_session_keeps_the_database_unchanged() {
+        let (root, store) = test_store();
+        store.save(&sample_session()).unwrap();
+        assert!(matches!(
+            store.delete("missing-session"),
+            Err(AppError::SessionNotFound)
+        ));
+        assert_eq!(store.list().unwrap().len(), 1);
+        assert_eq!(store.query_people("session-1", &query()).unwrap().total, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deleting_the_last_listed_session_discards_transient_combined_sessions() {
+        let (root, store) = test_store();
+        store.save(&sample_session()).unwrap();
+        let mut combined = sample_session();
+        combined.session_id = "combined-session".into();
+        combined.is_combined = true;
+        combined.source_session_ids = vec!["session-1".into()];
+        store.save(&combined).unwrap();
+        assert_eq!(store.list().unwrap().len(), 1);
+
+        assert!(store.delete("session-1").unwrap().is_none());
+        assert!(store.list().unwrap().is_empty());
+        assert!(matches!(
+            store.load("combined-session"),
+            Err(AppError::SessionNotFound)
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deleting_the_last_session_recreates_an_empty_database_file() {
+        let (root, store) = test_store();
+        store.save(&sample_session()).unwrap();
+        {
+            let connection = store.connection().unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE stale_marker(payload BLOB);
+                     INSERT INTO stale_marker(payload) VALUES(zeroblob(10485760));
+                     PRAGMA wal_checkpoint(TRUNCATE);",
+                )
+                .unwrap();
+        }
+        assert!(fs::metadata(&store.database_path).unwrap().len() > 8 * 1024 * 1024);
+
+        assert!(store.delete("session-1").unwrap().is_none());
+        assert!(store.list().unwrap().is_empty());
+        let connection = store.connection().unwrap();
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        let stale_table_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'stale_marker')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, DATABASE_VERSION);
+        assert!(!stale_table_exists);
+        drop(connection);
+
+        store.save(&sample_session()).unwrap();
+        assert_eq!(store.list().unwrap().len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn opening_an_oversized_empty_database_recreates_it() {
+        let (root, store) = test_store();
+        let database_path = store.database_path.clone();
+        {
+            let connection = store.connection().unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE stale_marker(payload BLOB);
+                     INSERT INTO stale_marker(payload) VALUES(zeroblob(10485760));
+                     PRAGMA wal_checkpoint(TRUNCATE);",
+                )
+                .unwrap();
+        }
+        drop(store);
+        let oversized_length = fs::metadata(&database_path).unwrap().len();
+        assert!(oversized_length > EMPTY_DATABASE_RESET_THRESHOLD_BYTES);
+
+        let reopened = SessionStore::open(root.clone()).unwrap();
+        assert!(reopened.list().unwrap().is_empty());
+        assert!(fs::metadata(&database_path).unwrap().len() < oversized_length);
+        let connection = reopened.connection().unwrap();
+        let stale_table_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'stale_marker')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!stale_table_exists);
+        drop(connection);
         fs::remove_dir_all(root).unwrap();
     }
 
