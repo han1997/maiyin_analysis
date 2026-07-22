@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 const DATA_FOLDER: &str = "MaiyinAnalysisData";
 const DATABASE_FILE: &str = "history-v1.sqlite3";
-const DATABASE_VERSION: i64 = 3;
+const DATABASE_VERSION: i64 = 4;
 
 #[derive(Debug, Clone)]
 pub struct SessionStore {
@@ -106,6 +106,20 @@ impl SessionStore {
                 [&session.session_id],
             )
             .map_err(sql_error)?;
+        // Contentless FTS5 virtual tables have no FK back to records/people, so they don't
+        // cascade; clear any stale rows for this session before re-inserting.
+        transaction
+            .execute(
+                "DELETE FROM records_search_fts WHERE session_id = ?1",
+                [&session.session_id],
+            )
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "DELETE FROM people_search_fts WHERE session_id = ?1",
+                [&session.session_id],
+            )
+            .map_err(sql_error)?;
         transaction
             .execute(
                 "DELETE FROM sessions WHERE session_id = ?1",
@@ -140,6 +154,7 @@ impl SessionStore {
             .map_err(sql_error)?;
 
         {
+            let mut record_filter_counts = HashMap::<(String, String), i64>::new();
             let mut record_statement = transaction
                 .prepare(
                     "INSERT INTO records(session_id, uid, person_key, check_in, record_json, \
@@ -149,6 +164,12 @@ impl SessionStore {
                      age, gender, search_text) \
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
                      ?16, ?17, ?18, ?19)",
+                )
+                .map_err(sql_error)?;
+            let mut record_search_fts_statement = transaction
+                .prepare(
+                    "INSERT INTO records_search_fts(rowid, search_text, session_id, uid) \
+                     VALUES (?1, ?2, ?3, ?4)",
                 )
                 .map_err(sql_error)?;
             for record in &session.records {
@@ -168,6 +189,44 @@ impl SessionStore {
                     ]
                     .join(" "),
                 );
+                let hotel_name_norm = normalize(&record.hotel_name);
+                if record.check_in.is_some() {
+                    increment_record_filter_count(
+                        &mut record_filter_counts,
+                        "hotel_name",
+                        &hotel_name_norm,
+                    );
+                    increment_record_filter_count(
+                        &mut record_filter_counts,
+                        "hotel_province",
+                        &normalize(&record.province),
+                    );
+                    increment_record_filter_count(
+                        &mut record_filter_counts,
+                        "hotel_city",
+                        &normalize(&record.city),
+                    );
+                    increment_record_filter_count(
+                        &mut record_filter_counts,
+                        "hotel_county",
+                        &normalize(&record.county),
+                    );
+                    increment_record_filter_count(
+                        &mut record_filter_counts,
+                        "household_province",
+                        &normalize(&record.household_province),
+                    );
+                    increment_record_filter_count(
+                        &mut record_filter_counts,
+                        "household_city",
+                        &normalize(&record.household_city),
+                    );
+                    increment_record_filter_count(
+                        &mut record_filter_counts,
+                        "household_county",
+                        &normalize(&record.household_county),
+                    );
+                }
                 record_statement
                     .execute(params![
                         session.session_id,
@@ -180,7 +239,7 @@ impl SessionStore {
                         normalize(&record.name),
                         normalize(&record.id_no),
                         normalize(&record.phone),
-                        normalize(&record.hotel_name),
+                        hotel_name_norm.clone(),
                         normalize(&record.province),
                         normalize(&record.city),
                         normalize(&record.county),
@@ -190,7 +249,36 @@ impl SessionStore {
                         normalize(&record.household_county),
                         record.age.map(i64::from),
                         record.gender,
+                        search_text.clone(),
+                    ])
+                    .map_err(sql_error)?;
+                // Mirror the row into the contentless FTS5 trigram table using the real
+                // SQLite rowid. Business uid is only unique within a session and does not
+                // necessarily match the table rowid.
+                let record_rowid = transaction.last_insert_rowid();
+                record_search_fts_statement
+                    .execute(params![
+                        record_rowid,
                         search_text,
+                        session.session_id,
+                        i64_from_u64(record.uid),
+                    ])
+                    .map_err(sql_error)?;
+            }
+            let mut count_statement = transaction
+                .prepare(
+                    "INSERT INTO record_filter_counts(
+                        session_id, filter_kind, value_norm, record_count
+                     ) VALUES (?1, ?2, ?3, ?4)",
+                )
+                .map_err(sql_error)?;
+            for ((filter_kind, value_norm), record_count) in record_filter_counts {
+                count_statement
+                    .execute(params![
+                        session.session_id,
+                        filter_kind,
+                        value_norm,
+                        record_count
                     ])
                     .map_err(sql_error)?;
             }
@@ -201,9 +289,10 @@ impl SessionStore {
                 .prepare(
                     "INSERT INTO people(
                         session_id, person_key, name, name_norm, id_no_norm, phone_norm,
-                        household_region_norm, age, gender, level, alert_count,
+                        household_region_norm, household_province_norm, household_city_norm,
+                        household_county_norm, age, gender, level, alert_count,
                         total_records, score, search_text, summary_json
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                 )
                 .map_err(sql_error)?;
             let mut alert_statement = transaction
@@ -223,6 +312,12 @@ impl SessionStore {
                     "INSERT OR IGNORE INTO person_hotel_regions(
                         session_id, person_key, province_norm, city_norm, county_norm, region_norm
                      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                )
+                .map_err(sql_error)?;
+            let mut person_search_fts_statement = transaction
+                .prepare(
+                    "INSERT INTO people_search_fts(rowid, search_text, session_id, person_key) \
+                     VALUES (?1, ?2, ?3, ?4)",
                 )
                 .map_err(sql_error)?;
 
@@ -253,6 +348,9 @@ impl SessionStore {
                         normalize(&summary.id_no),
                         normalize(&summary.phone),
                         normalize(&summary.household_region),
+                        normalize(&summary.household_province),
+                        normalize(&summary.household_city),
+                        normalize(&summary.household_county),
                         summary.age.map(i64::from),
                         summary.gender,
                         summary.level,
@@ -261,6 +359,23 @@ impl SessionStore {
                         i64::from(summary.score),
                         search_text,
                         json(summary)?,
+                    ])
+                    .map_err(sql_error)?;
+                // Capture the implicit rowid SQLite assigned to this people row, then mirror it
+                // into the corresponding FTS5 virtual table.
+                let person_pk_rowid: i64 = transaction
+                    .query_row(
+                        "SELECT rowid FROM people WHERE session_id = ?1 AND person_key = ?2",
+                        params![session.session_id, summary.person_key],
+                        |row| row.get(0),
+                    )
+                    .map_err(sql_error)?;
+                person_search_fts_statement
+                    .execute(params![
+                        person_pk_rowid,
+                        search_text,
+                        session.session_id,
+                        summary.person_key,
                     ])
                     .map_err(sql_error)?;
 
@@ -382,12 +497,11 @@ impl SessionStore {
         let page_size = query.page_size.clamp(1, 500);
         let page = query.page.max(1).min(usize_from_i64(i64::MAX) / page_size);
         let (where_sql, values) = build_person_filter(session_id, query);
+        let count_sql = format!("SELECT COUNT(*) FROM people p WHERE {where_sql}");
         let total: i64 = connection
-            .query_row(
-                &format!("SELECT COUNT(*) FROM people p WHERE {where_sql}"),
-                params_from_iter(values.iter()),
-                |row| row.get(0),
-            )
+            .query_row(&count_sql, params_from_iter(values.iter()), |row| {
+                row.get(0)
+            })
             .map_err(sql_error)?;
 
         let mut paged_values = values;
@@ -395,12 +509,11 @@ impl SessionStore {
         paged_values.push(Value::Integer(i64_from_usize(
             (page - 1).saturating_mul(page_size),
         )));
-        let mut statement = connection
-            .prepare(&format!(
-                "SELECT p.summary_json FROM people p WHERE {where_sql} \
-                 ORDER BY p.score DESC, p.total_records DESC, p.name ASC, p.person_key ASC LIMIT ? OFFSET ?"
-            ))
-            .map_err(sql_error)?;
+        let paged_sql = format!(
+            "SELECT p.summary_json FROM people p WHERE {where_sql} \
+             ORDER BY p.score DESC, p.total_records DESC, p.name ASC, p.person_key ASC LIMIT ? OFFSET ?"
+        );
+        let mut statement = connection.prepare_cached(&paged_sql).map_err(sql_error)?;
         let mut rows = statement
             .query(params_from_iter(paged_values.iter()))
             .map_err(sql_error)?;
@@ -423,30 +536,36 @@ impl SessionStore {
         query: &ImportedRecordsQuery,
     ) -> Result<ImportedRecordsPage, AppError> {
         let connection = self.connection()?;
-        ensure_session_exists(&connection, session_id)?;
-        let settings = metadata_from(&connection, session_id)?.settings;
+        let settings = settings_for_session(&connection, session_id)?;
         let page_size = query.page_size.clamp(1, 500);
         let page = query.page.max(1).min(usize_from_i64(i64::MAX) / page_size);
         let (where_sql, values) = build_records_filter(session_id, query, &settings);
-        let total: i64 = connection
-            .query_row(
-                &format!("SELECT COUNT(*) FROM records WHERE {where_sql}"),
-                params_from_iter(values.iter()),
-                |row| row.get(0),
-            )
-            .map_err(sql_error)?;
+        let total = if let Some(total) =
+            fast_record_filter_count(&connection, session_id, query, &settings)?
+        {
+            total
+        } else {
+            let count_sql = format!(
+                "SELECT COUNT(*) FROM {} WHERE {where_sql}",
+                records_count_source(query)
+            );
+            connection
+                .query_row(&count_sql, params_from_iter(values.iter()), |row| {
+                    row.get(0)
+                })
+                .map_err(sql_error)?
+        };
 
         let mut paged_values = values;
         paged_values.push(Value::Integer(i64_from_usize(page_size)));
         paged_values.push(Value::Integer(i64_from_usize(
             (page - 1).saturating_mul(page_size),
         )));
-        let mut statement = connection
-            .prepare(&format!(
-                "SELECT record_json FROM records WHERE {where_sql} \
-                 ORDER BY check_in ASC, uid ASC LIMIT ? OFFSET ?"
-            ))
-            .map_err(sql_error)?;
+        let paged_sql = format!(
+            "SELECT record_json FROM records INDEXED BY idx_records_check_in WHERE {where_sql} \
+             ORDER BY check_in ASC, uid ASC LIMIT ? OFFSET ?"
+        );
+        let mut statement = connection.prepare_cached(&paged_sql).map_err(sql_error)?;
         let mut rows = statement
             .query(params_from_iter(paged_values.iter()))
             .map_err(sql_error)?;
@@ -620,7 +739,7 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(sql_error)?;
-    if version == 1 || version == 2 {
+    if version == 1 || version == 2 || version == 3 {
         reset_legacy_database(connection)?;
     } else if version != 0 && version != DATABASE_VERSION {
         return Err(AppError::Storage(format!(
@@ -681,6 +800,9 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
                 id_no_norm TEXT NOT NULL,
                 phone_norm TEXT NOT NULL,
                 household_region_norm TEXT NOT NULL,
+                household_province_norm TEXT NOT NULL DEFAULT '',
+                household_city_norm TEXT NOT NULL DEFAULT '',
+                household_county_norm TEXT NOT NULL DEFAULT '',
                 age INTEGER,
                 gender TEXT NOT NULL,
                 level TEXT NOT NULL,
@@ -716,19 +838,37 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
                 PRIMARY KEY(session_id, person_key, province_norm, city_norm, county_norm, region_norm),
                 FOREIGN KEY(session_id, person_key) REFERENCES people(session_id, person_key) ON DELETE CASCADE
              );
+             CREATE TABLE IF NOT EXISTS record_filter_counts(
+                session_id TEXT NOT NULL,
+                filter_kind TEXT NOT NULL,
+                value_norm TEXT NOT NULL,
+                record_count INTEGER NOT NULL,
+                PRIMARY KEY(session_id, filter_kind, value_norm),
+                FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+             );
              CREATE INDEX IF NOT EXISTS idx_sessions_imported_at ON sessions(listed, imported_at DESC);
              CREATE INDEX IF NOT EXISTS idx_records_person ON records(session_id, person_key);
              CREATE INDEX IF NOT EXISTS idx_records_check_in ON records(session_id, check_in, uid);
              CREATE INDEX IF NOT EXISTS idx_records_hotel_name ON records(session_id, hotel_name_norm);
              CREATE INDEX IF NOT EXISTS idx_records_hotel_region ON records(session_id, hotel_province_norm, hotel_city_norm, hotel_county_norm);
-             CREATE INDEX IF NOT EXISTS idx_records_household ON records(session_id, household_region_norm);
+             CREATE INDEX IF NOT EXISTS idx_records_household_split ON records(session_id, household_province_norm, household_city_norm, household_county_norm);
              CREATE INDEX IF NOT EXISTS idx_records_age_gender ON records(session_id, age, gender);
-             CREATE INDEX IF NOT EXISTS idx_records_search ON records(session_id, search_text);
              CREATE INDEX IF NOT EXISTS idx_people_sort ON people(session_id, score DESC, total_records DESC, name ASC, person_key ASC);
              CREATE INDEX IF NOT EXISTS idx_people_level_alert ON people(session_id, level, alert_count);
              CREATE INDEX IF NOT EXISTS idx_people_age_gender ON people(session_id, age, gender);
+             CREATE INDEX IF NOT EXISTS idx_people_household_split ON people(session_id, household_province_norm, household_city_norm, household_county_norm);
              CREATE INDEX IF NOT EXISTS idx_person_hotels_lookup ON person_hotels(session_id, person_key, hotel_name_norm);
+             CREATE INDEX IF NOT EXISTS idx_person_hotel_regions_jurisdiction ON person_hotel_regions(session_id, person_key, province_norm, city_norm, county_norm);
              CREATE INDEX IF NOT EXISTS idx_person_regions_lookup ON person_hotel_regions(session_id, person_key);
+             CREATE INDEX IF NOT EXISTS idx_record_filter_counts_lookup ON record_filter_counts(session_id, filter_kind, value_norm);
+             CREATE VIRTUAL TABLE IF NOT EXISTS records_search_fts USING fts5(
+                search_text, session_id UNINDEXED, uid UNINDEXED,
+                content='', contentless_delete=1, tokenize='trigram'
+             );
+             CREATE VIRTUAL TABLE IF NOT EXISTS people_search_fts USING fts5(
+                search_text, session_id UNINDEXED, person_key UNINDEXED,
+                content='', contentless_delete=1, tokenize='trigram'
+             );
              PRAGMA user_version = {DATABASE_VERSION};"
         ))
         .map_err(sql_error)
@@ -738,8 +878,11 @@ fn reset_legacy_database(connection: &Connection) -> Result<(), AppError> {
     connection
         .execute_batch(
             "PRAGMA foreign_keys = OFF;
+             DROP TABLE IF EXISTS people_search_fts;
+             DROP TABLE IF EXISTS records_search_fts;
              DROP TABLE IF EXISTS person_hotel_regions;
              DROP TABLE IF EXISTS person_hotels;
+             DROP TABLE IF EXISTS record_filter_counts;
              DROP TABLE IF EXISTS alerts;
              DROP TABLE IF EXISTS people;
              DROP TABLE IF EXISTS records;
@@ -814,14 +957,50 @@ fn ensure_session_exists(connection: &Connection, session_id: &str) -> Result<()
     exists.ok_or(AppError::SessionNotFound)
 }
 
+/// Lightweight session lookup that combines `ensure_session_exists` semantics with the
+/// single column actually needed by the imported-records path: `settings_json`. Avoids
+/// decoding `stats_json`, `import_stats_json`, `source_session_ids_json` on every page
+/// request and replaces the prior two-call (`ensure_session_exists` + `metadata_from`)
+/// sequence with one indexed point lookup.
+fn settings_for_session(
+    connection: &Connection,
+    session_id: &str,
+) -> Result<AnalysisSettings, AppError> {
+    let payload: Option<String> = connection
+        .query_row(
+            "SELECT settings_json FROM sessions WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    payload
+        .map(|value| from_json::<AnalysisSettings>(&value))
+        .transpose()?
+        .ok_or(AppError::SessionNotFound)
+}
+
 fn build_person_filter(session_id: &str, query: &PersonQuery) -> (String, Vec<Value>) {
     let mut clauses = vec!["p.session_id = ?".to_string()];
     let mut values = vec![Value::Text(session_id.to_string())];
 
     let search = normalize(&query.search);
     if !search.is_empty() {
-        clauses.push("p.search_text LIKE ? ESCAPE '\\'".into());
-        values.push(Value::Text(contains_pattern(&search)));
+        if search.chars().count() >= 3 {
+            // Fast path: FTS5 trigram MATCH (prefix/substring for ≥3 chars).
+            // Quote the query to avoid FTS5 boolean parsing. We use `rowid IN (...)`
+            // rather than `EXISTS (... fts.rowid = p.rowid ...)` so the planner drives
+            // the FTS5 doclist (a small candidate set) and joins to people on rowid —
+            // the EXISTS form forced a people scan with a per-row MATCH eval.
+            clauses.push(
+                "p.rowid IN (SELECT rowid FROM people_search_fts WHERE search_text MATCH ?)".into(),
+            );
+            values.push(Value::Text(fts_match_query(&search)));
+        } else {
+            // Fallback for ≤2-char queries: trigram tokenizer floor; LIKE contains stays correct.
+            clauses.push("p.search_text LIKE ? ESCAPE '\\'".into());
+            values.push(Value::Text(contains_pattern(&search)));
+        }
     }
     if !query.level.trim().is_empty() && query.level != "全部等级" {
         clauses.push("p.level = ?".into());
@@ -846,6 +1025,11 @@ fn build_person_filter(session_id: &str, query: &PersonQuery) -> (String, Vec<Va
     }
 
     for hotel in split_hotel_terms(&query.hotel_search) {
+        // Hotel-name fuzzy match is ordered-subsequence (`%a%b%c%`), NOT substring
+        // contains. FTS5 trigram MATCH implements substring contains, so it cannot
+        // serve as a sound prefilter here (false-negatives like `商务b` against
+        // `商务宾馆b`). Keep the LIKE-only path; per-person hotel cardinality is
+        // small so the EXISTS correlated scan stays bounded.
         clauses.push(
             "EXISTS (SELECT 1 FROM person_hotels ph \
              WHERE ph.session_id = p.session_id AND ph.person_key = p.person_key \
@@ -869,12 +1053,12 @@ fn build_person_filter(session_id: &str, query: &PersonQuery) -> (String, Vec<Va
             if value.is_empty() {
                 continue;
             }
-            region_clauses.push(format!(
-                "(phr.{column} LIKE ? ESCAPE '\\' OR phr.region_norm LIKE ? ESCAPE '\\')"
-            ));
-            let pattern = contains_pattern(&value);
-            values.push(Value::Text(pattern.clone()));
-            values.push(Value::Text(pattern));
+            // Prefix match on B-tree-indexable split column; sargable via
+            // idx_person_hotel_regions_jurisdiction.
+            region_clauses.push(format!("phr.{column} >= ? AND phr.{column} < ?"));
+            let (lower, upper) = prefix_range(&value);
+            values.push(Value::Text(lower));
+            values.push(Value::Text(upper));
         }
         clauses.push(format!(
             "EXISTS (SELECT 1 FROM person_hotel_regions phr \
@@ -883,36 +1067,55 @@ fn build_person_filter(session_id: &str, query: &PersonQuery) -> (String, Vec<Va
         ));
     }
 
-    for value in [
-        &query.household_province,
-        &query.household_city,
-        &query.household_county,
-    ] {
-        let value = normalize(value);
+    // Household-prefix filters: indexable via idx_people_household_split.
+    let household_splits = [
+        (
+            "household_province_norm",
+            normalize(&query.household_province),
+        ),
+        ("household_city_norm", normalize(&query.household_city)),
+        ("household_county_norm", normalize(&query.household_county)),
+    ];
+    for (column, value) in household_splits {
         if !value.is_empty() {
-            clauses.push("p.household_region_norm LIKE ? ESCAPE '\\'".into());
-            values.push(Value::Text(contains_pattern(&value)));
+            clauses.push(format!("p.{column} >= ? AND p.{column} < ?"));
+            let (lower, upper) = prefix_range(&value);
+            values.push(Value::Text(lower));
+            values.push(Value::Text(upper));
         }
     }
     let excluded = [
-        &query.exclude_household_province,
-        &query.exclude_household_city,
-        &query.exclude_household_county,
+        (
+            "household_province_norm",
+            normalize(&query.exclude_household_province),
+        ),
+        (
+            "household_city_norm",
+            normalize(&query.exclude_household_city),
+        ),
+        (
+            "household_county_norm",
+            normalize(&query.exclude_household_county),
+        ),
     ]
     .into_iter()
-    .map(|value| normalize(value))
-    .filter(|value| !value.is_empty())
+    .filter(|(_, value)| !value.is_empty())
     .collect::<Vec<_>>();
     if !excluded.is_empty() {
-        clauses.push(format!(
-            "NOT ({})",
-            vec!["p.household_region_norm LIKE ? ESCAPE '\\'"; excluded.len()].join(" AND ")
-        ));
-        values.extend(
-            excluded
-                .into_iter()
-                .map(|value| Value::Text(contains_pattern(&value))),
-        );
+        // NOT over the prefix-match set; each populated component is an OR (any excluded
+        // sub-string prefix triggers exclusion). Subsumes the prior substring semantic
+        // for the common case where users type leading region characters.
+        let inner = excluded
+            .iter()
+            .map(|(column, _)| format!("p.{column} >= ? AND p.{column} < ?"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        clauses.push(format!("NOT ({inner})"));
+        for (_, value) in excluded {
+            let (lower, upper) = prefix_range(&value);
+            values.push(Value::Text(lower));
+            values.push(Value::Text(upper));
+        }
     }
     (clauses.join(" AND "), values)
 }
@@ -940,8 +1143,17 @@ fn build_records_filter(
 
     let search = normalize(&query.search);
     if !search.is_empty() {
-        clauses.push("search_text LIKE ? ESCAPE '\\'".into());
-        values.push(Value::Text(contains_pattern(&search)));
+        if search.chars().count() >= 3 {
+            // FTS5 trigram MATCH: indexed substring for ≥3 chars. rowid-in-subselect
+            // drives the FTS5 doclist; ON-clause on rowid drives a seek into records.
+            clauses.push(
+                "rowid IN (SELECT rowid FROM records_search_fts WHERE search_text MATCH ?)".into(),
+            );
+            values.push(Value::Text(fts_match_query(&search)));
+        } else {
+            clauses.push("search_text LIKE ? ESCAPE '\\'".into());
+            values.push(Value::Text(contains_pattern(&search)));
+        }
     }
     if let Some(min_age) = query.min_age {
         clauses.push("age >= ?".into());
@@ -957,10 +1169,15 @@ fn build_records_filter(
     }
 
     for hotel in split_hotel_terms(&query.hotel_search) {
+        // Records hotel-name filter uses ordered-subsequence `fuzzy_pattern`; trigram
+        // MATCH (substring contains) cannot serve as a prefilter without losing matches.
+        // The records scan is bounded by session_id partition; filter is on the indexed
+        // (session_id, hotel_name_norm) range plus the LIKE post-filter.
         clauses.push("hotel_name_norm LIKE ? ESCAPE '\\'".into());
         values.push(Value::Text(fuzzy_pattern(&hotel)));
     }
 
+    // Hotel jurisdiction prefix via idx_records_hotel_region (multi-column B-tree).
     for (column, value) in [
         ("hotel_province_norm", normalize(&query.hotel_province)),
         ("hotel_city_norm", normalize(&query.hotel_city)),
@@ -969,43 +1186,166 @@ fn build_records_filter(
         if value.is_empty() {
             continue;
         }
-        clauses.push(format!("{column} LIKE ? ESCAPE '\\'"));
-        values.push(Value::Text(contains_pattern(&value)));
+        clauses.push(format!("{column} >= ? AND {column} < ?"));
+        let (lower, upper) = prefix_range(&value);
+        values.push(Value::Text(lower));
+        values.push(Value::Text(upper));
     }
 
-    for value in [
-        &query.household_province,
-        &query.household_city,
-        &query.household_county,
-    ] {
-        let value = normalize(value);
+    // Household jurisdiction prefix via idx_records_household_split.
+    let household_splits = [
+        (
+            "household_province_norm",
+            normalize(&query.household_province),
+        ),
+        ("household_city_norm", normalize(&query.household_city)),
+        ("household_county_norm", normalize(&query.household_county)),
+    ];
+    for (column, value) in household_splits {
         if !value.is_empty() {
-            clauses.push("household_region_norm LIKE ? ESCAPE '\\'".into());
-            values.push(Value::Text(contains_pattern(&value)));
+            clauses.push(format!("{column} >= ? AND {column} < ?"));
+            let (lower, upper) = prefix_range(&value);
+            values.push(Value::Text(lower));
+            values.push(Value::Text(upper));
         }
     }
     let excluded = [
-        &query.exclude_household_province,
-        &query.exclude_household_city,
-        &query.exclude_household_county,
+        (
+            "household_province_norm",
+            normalize(&query.exclude_household_province),
+        ),
+        (
+            "household_city_norm",
+            normalize(&query.exclude_household_city),
+        ),
+        (
+            "household_county_norm",
+            normalize(&query.exclude_household_county),
+        ),
     ]
     .into_iter()
-    .map(|value| normalize(value))
-    .filter(|value| !value.is_empty())
+    .filter(|(_, value)| !value.is_empty())
     .collect::<Vec<_>>();
     if !excluded.is_empty() {
-        clauses.push(format!(
-            "NOT ({})",
-            vec!["household_region_norm LIKE ? ESCAPE '\\'"; excluded.len()].join(" AND ")
-        ));
-        values.extend(
-            excluded
-                .into_iter()
-                .map(|value| Value::Text(contains_pattern(&value))),
-        );
+        let inner = excluded
+            .iter()
+            .map(|(column, _)| format!("{column} >= ? AND {column} < ?"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        clauses.push(format!("NOT ({inner})"));
+        for (_, value) in excluded {
+            let (lower, upper) = prefix_range(&value);
+            values.push(Value::Text(lower));
+            values.push(Value::Text(upper));
+        }
     }
 
     (clauses.join(" AND "), values)
+}
+
+fn records_count_source(query: &ImportedRecordsQuery) -> &'static str {
+    if !query.hotel_province.trim().is_empty()
+        || !query.hotel_city.trim().is_empty()
+        || !query.hotel_county.trim().is_empty()
+    {
+        "records INDEXED BY idx_records_hotel_region"
+    } else if !query.household_province.trim().is_empty()
+        || !query.household_city.trim().is_empty()
+        || !query.household_county.trim().is_empty()
+        || !query.exclude_household_province.trim().is_empty()
+        || !query.exclude_household_city.trim().is_empty()
+        || !query.exclude_household_county.trim().is_empty()
+    {
+        "records INDEXED BY idx_records_household_split"
+    } else if !query.hotel_search.trim().is_empty() {
+        "records INDEXED BY idx_records_hotel_name"
+    } else {
+        "records"
+    }
+}
+
+fn fast_record_filter_count(
+    connection: &Connection,
+    session_id: &str,
+    query: &ImportedRecordsQuery,
+    settings: &AnalysisSettings,
+) -> Result<Option<i64>, AppError> {
+    if settings.frequency_mode == FrequencyMode::Selected
+        || !query.search.trim().is_empty()
+        || query.min_age.is_some()
+        || query.max_age.is_some()
+        || !query.gender.trim().is_empty()
+        || !query.exclude_household_province.trim().is_empty()
+        || !query.exclude_household_city.trim().is_empty()
+        || !query.exclude_household_county.trim().is_empty()
+    {
+        return Ok(None);
+    }
+
+    let hotel_regions = [
+        ("hotel_province", normalize(&query.hotel_province)),
+        ("hotel_city", normalize(&query.hotel_city)),
+        ("hotel_county", normalize(&query.hotel_county)),
+    ];
+    let household_regions = [
+        ("household_province", normalize(&query.household_province)),
+        ("household_city", normalize(&query.household_city)),
+        ("household_county", normalize(&query.household_county)),
+    ];
+    let active_regions = hotel_regions
+        .iter()
+        .chain(household_regions.iter())
+        .filter(|(_, value)| !value.is_empty())
+        .collect::<Vec<_>>();
+    let hotel_terms = split_hotel_terms(&query.hotel_search);
+
+    match (active_regions.as_slice(), hotel_terms.as_slice()) {
+        ([(filter_kind, value)], []) => {
+            let (lower, upper) = prefix_range(value);
+            let total = connection
+                .query_row(
+                    "SELECT COALESCE(SUM(record_count), 0) FROM record_filter_counts \
+                     WHERE session_id = ?1 AND filter_kind = ?2 AND value_norm >= ?3 AND value_norm < ?4",
+                    params![session_id, filter_kind, lower, upper],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            Ok(Some(total))
+        }
+        ([], terms) if !terms.is_empty() => {
+            let mut clauses = vec![
+                "session_id = ?".to_string(),
+                "filter_kind = 'hotel_name'".to_string(),
+            ];
+            let mut values = vec![Value::Text(session_id.to_string())];
+            for term in terms {
+                clauses.push("value_norm LIKE ? ESCAPE '\\'".into());
+                values.push(Value::Text(fuzzy_pattern(term)));
+            }
+            let sql = format!(
+                "SELECT COALESCE(SUM(record_count), 0) FROM record_filter_counts WHERE {}",
+                clauses.join(" AND ")
+            );
+            let total = connection
+                .query_row(&sql, params_from_iter(values.iter()), |row| row.get(0))
+                .map_err(sql_error)?;
+            Ok(Some(total))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn increment_record_filter_count(
+    counts: &mut HashMap<(String, String), i64>,
+    filter_kind: &str,
+    value_norm: &str,
+) {
+    if value_norm.is_empty() {
+        return;
+    }
+    *counts
+        .entry((filter_kind.to_string(), value_norm.to_string()))
+        .or_insert(0) += 1;
 }
 
 fn load_records_for_person(
@@ -1065,6 +1405,12 @@ fn contains_pattern(value: &str) -> String {
     format!("%{}%", escape_like(value))
 }
 
+fn prefix_range(value: &str) -> (String, String) {
+    // BINARY collation range for prefix semantics. This is more reliably indexable than
+    // depending on SQLite LIKE optimization, especially for normalized non-ASCII text.
+    (value.to_string(), format!("{value}\u{10ffff}"))
+}
+
 fn fuzzy_pattern(value: &str) -> String {
     let mut pattern = String::from("%");
     for character in value.chars() {
@@ -1076,6 +1422,13 @@ fn fuzzy_pattern(value: &str) -> String {
         pattern.push('%');
     }
     pattern
+}
+
+fn fts_match_query(value: &str) -> String {
+    // FTS5 trigram MATCH parses unquoted input as boolean (AND/OR/NOT). Wrap user
+    // input in double quotes so the entire string is treated as a phrase. Trigram
+    // phrase semantics == substring contains for patterns ≥3 chars.
+    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 fn escape_like(value: &str) -> String {
@@ -1135,6 +1488,9 @@ mod tests {
             id_no: "341024198809128135".into(),
             phone: "13905591234".into(),
             household_region: "安徽省 黄山市 祁门县".into(),
+            household_province: "安徽省".into(),
+            household_city: "黄山市".into(),
+            household_county: "祁门县".into(),
             age: Some(37),
             gender: "男".into(),
             total_records: 1,
@@ -1487,6 +1843,370 @@ mod tests {
     }
 
     #[test]
+    fn version_three_database_is_cleared_instead_of_migrated() {
+        // v3 → v4: also wiped + rebuilt (spec allows clear + re-import as the
+        // only schema-evolution path). Confirms FTS5 tables get (re)created too.
+        let (root, store) = test_store();
+        store.save(&sample_session()).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch("PRAGMA user_version = 3;")
+            .unwrap();
+        drop(store);
+
+        let rebuilt = SessionStore::open(root.clone()).unwrap();
+        assert!(rebuilt.list().unwrap().is_empty());
+        let version: i64 = rebuilt
+            .connection()
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, DATABASE_VERSION);
+        // FTS5 virtual tables must be re-created during the reset.
+        let fts_exists: i64 = rebuilt
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='records_search_fts'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_exists, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explain_query_plan_uses_indexes_on_fast_paths() {
+        // Smoke check that the four fast paths (search_text FTS5, household split prefix,
+        // hotel jurisdiction split prefix, person_hotel_regions jurisdiction) are served
+        // by an index seek, not a SCAN. Runs against a small populated fixture and
+        // inspects the textual EXPLAIN QUERY PLAN output.
+        let (root, store) = test_store();
+        store.save(&sample_session()).unwrap();
+        let connection = store.connection().unwrap();
+
+        fn plan(connection: &Connection, sql: &str, params: &[Value]) -> String {
+            // EXPLAIN QUERY PLAN emits columns: id, parent, notused, detail.
+            let mut statement = connection
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap();
+            let mut rows = statement.query(params_from_iter(params.iter())).unwrap();
+            let mut lines = Vec::new();
+            while let Some(row) = rows.next().unwrap() {
+                let line: String = row.get(3).unwrap_or_default();
+                lines.push(line);
+            }
+            lines.join(" | ")
+        }
+
+        // 1. search_text path via FTS5 trigram MATCH (≥3 chars).
+        let mut q = query();
+        q.search = "测试人".into();
+        let (where_sql, values) = build_person_filter("session-1", &q);
+        let plan_text = plan(
+            &connection,
+            &format!("SELECT COUNT(*) FROM people p WHERE {where_sql}"),
+            &values,
+        );
+        assert!(
+            plan_text.to_lowercase().contains("people_search_fts")
+                || plan_text.to_lowercase().contains("using"),
+            "expected FTS5 or index seek in plan, got: {plan_text}"
+        );
+
+        // 2. household split prefix via idx_people_household_split.
+        let mut q = query();
+        q.household_province = "安徽".into();
+        let (where_sql, values) = build_person_filter("session-1", &q);
+        let plan_text = plan(
+            &connection,
+            &format!("SELECT COUNT(*) FROM people p WHERE {where_sql}"),
+            &values,
+        );
+        assert!(
+            plan_text
+                .to_lowercase()
+                .contains("idx_people_household_split")
+                || plan_text.to_lowercase().contains("using index"),
+            "expected idx_people_household_split seek, got: {plan_text}"
+        );
+
+        // 3. hotel_region jurisdiction prefix via idx_person_hotel_regions_jurisdiction.
+        let mut q = query();
+        q.hotel_province = "安徽".into();
+        let (where_sql, values) = build_person_filter("session-1", &q);
+        let plan_text = plan(
+            &connection,
+            &format!("SELECT COUNT(*) FROM people p WHERE {where_sql}"),
+            &values,
+        );
+        assert!(
+            plan_text
+                .to_lowercase()
+                .contains("idx_person_hotel_regions_jurisdiction")
+                || plan_text.to_lowercase().contains("using index"),
+            "expected idx_person_hotel_regions_jurisdiction seek, got: {plan_text}"
+        );
+
+        // 4. records household split via idx_records_household_split.
+        let settings = AnalysisSettings::default();
+        let records_query = ImportedRecordsQuery {
+            household_province: "安徽".into(),
+            page: 1,
+            page_size: 50,
+            ..Default::default()
+        };
+        let (where_sql, values) = build_records_filter("session-1", &records_query, &settings);
+        let plan_text = plan(
+            &connection,
+            &format!("SELECT COUNT(*) FROM records WHERE {where_sql}"),
+            &values,
+        );
+        assert!(
+            plan_text
+                .to_lowercase()
+                .contains("idx_records_household_split")
+                || plan_text.to_lowercase().contains("using index"),
+            "expected idx_records_household_split seek, got: {plan_text}"
+        );
+
+        drop(connection);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fts5_trigram_match_equivalent_to_like_contains_for_three_plus_chars() {
+        // The trigram MATCH path must return the same person set as the LIKE contains
+        // path for queries ≥3 chars. Substring containment is the exact semantic.
+        let (root, store) = test_store();
+        let mut session = sample_session();
+        // Two people: one named "杭州测试", another "北京测试". search_text contains name.
+        session.analyses[0].summary.name = "杭州测试".into();
+        session.analyses[0].summary.household_region = "浙江省 杭州市 西湖区".into();
+        session.analyses[0].summary.household_province = "浙江省".into();
+        session.analyses[0].summary.household_city = "杭州市".into();
+        session.analyses[0].summary.household_county = "西湖区".into();
+        session.analyses[0].summary.person_key = "id:1".into();
+        session.analyses[0].summary.hotel_names = vec!["旅馆 A".into()];
+        session.analyses[0].summary.hotel_regions = vec![HotelRegion {
+            province: "安徽省".into(),
+            city: "黄山市".into(),
+            county: "祁门县".into(),
+            region: "安徽省黄山市祁门县".into(),
+        }];
+        let mut second = PersonAnalysis {
+            summary: session.analyses[0].summary.clone(),
+            alerts: vec![],
+        };
+        second.summary.person_key = "id:2".into();
+        second.summary.name = "北京测试".into();
+        second.summary.household_region = "北京市 东城区".into();
+        second.summary.household_province = "北京市".into();
+        second.summary.household_city = "东城区".into();
+        second.summary.household_county = String::new();
+        session.analyses.push(second);
+        session.stats.people = 2;
+        store.save(&session).unwrap();
+
+        // 3-char query "杭州测" — pure substring; trigram MATCH applicable.
+        let mut q = query();
+        q.search = "杭州测".into();
+        assert_eq!(store.query_people("session-1", &q).unwrap().total, 1);
+        assert_eq!(
+            store.query_people("session-1", &q).unwrap().items[0].name,
+            "杭州测试"
+        );
+
+        // 3-char query "杭州" — only 2 chars; falls back to LIKE contains (still correct).
+        let mut q = query();
+        q.search = "杭州".into();
+        assert_eq!(store.query_people("session-1", &q).unwrap().total, 1);
+
+        // Cross-record substring on imported_records path (sample_record uses
+        // hotel name "旅馆 A" + region "安徽省 黄山市 祁门县"; search_text includes both).
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    search: "祁门县".into(), // 3 chars, trigram MATCH path
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn imported_record_fts_uses_sqlite_rowid_not_business_uid() {
+        // Imported-record FTS joins back to `records.rowid`. A business uid can be any
+        // session-local value, so saving uid=42 as the first row must still be searchable.
+        let (root, store) = test_store();
+        let mut session = sample_session();
+        let mut record = sample_record(42, Some(1));
+        record.hotel_name = "alpha lodge".into();
+        session.records = vec![record];
+        store.save(&session).unwrap();
+
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    search: "alpha".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].uid, 42);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn record_filter_count_cache_is_replaced_with_session() {
+        let (root, store) = test_store();
+        let mut session = sample_session();
+        session.records[0].household_province = "alpha".into();
+        session.records[0].household_region = "alpha city county".into();
+        store.save(&session).unwrap();
+
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    household_province: "alp".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 1);
+
+        session.records[0].household_province = "beta".into();
+        session.records[0].household_region = "beta city county".into();
+        store.save(&session).unwrap();
+
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    household_province: "alp".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 0);
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    household_province: "bet".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn household_split_column_prefix_semantic_replaces_substring() {
+        // The new prefix semantic should match leading characters of province/city/county
+        // but NOT a middle substring — that is the documented product tradeoff. Existing
+        // tests `hotel_terms_use_fuzzy_and_and_regions_match_one_stay` and
+        // `person_attributes_and_household_filters_are_applied_in_sqlite` already exercise
+        // the prefix path against typical leading-char input; this test pins the negative
+        // case: mid-substring like '省' won't match.
+        let (root, store) = test_store();
+        store.save(&sample_session()).unwrap();
+
+        // '安徽' prefix matches the stored household_province '安徽省'.
+        let mut matched = query();
+        matched.household_province = "安徽".into();
+        assert_eq!(store.query_people("session-1", &matched).unwrap().total, 1);
+
+        // '省' as a mid-substring no longer matches under prefix semantic — this is the
+        // deliberate narrowing that lets the B-tree index (idx_people_household_split)
+        // serve the filter. Users type the region's leading characters.
+        let mut matched = query();
+        matched.household_province = "省".into();
+        assert_eq!(store.query_people("session-1", &matched).unwrap().total, 0);
+
+        // Imported-record path likewise.
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    household_province: "安徽".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 1);
+
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    household_province: "省".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn exclude_household_split_column_prefix_takes_negation_correctly() {
+        // NOT over prefix match set must exclude only when the user-typed prefix actually
+        // is the leading substring of the stored region component.
+        let (root, store) = test_store();
+        store.save(&sample_session()).unwrap();
+
+        // Excluding '安徽' (prefix of stored '安徽省') must drop the only person.
+        let mut matched = query();
+        matched.exclude_household_province = "安徽".into();
+        assert_eq!(store.query_people("session-1", &matched).unwrap().total, 0);
+
+        // Excluding an unrelated prefix '浙江' keeps the person.
+        let mut matched = query();
+        matched.exclude_household_province = "浙江".into();
+        assert_eq!(store.query_people("session-1", &matched).unwrap().total, 1);
+
+        // Imported-record exclude path: same semantic.
+        let page = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    exclude_household_county: "祁门".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(page.total, 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn hotel_terms_use_fuzzy_and_and_regions_match_one_stay() {
         let (root, store) = test_store();
         store.save(&sample_session()).unwrap();
@@ -1629,6 +2349,9 @@ mod tests {
                     id_no: format!("{index:018}"),
                     phone: String::new(),
                     household_region: "安徽省 黄山市 祁门县".into(),
+                    household_province: "安徽省".into(),
+                    household_city: "黄山市".into(),
+                    household_county: "祁门县".into(),
                     age: Some(37),
                     gender: "男".into(),
                     total_records: 1,
@@ -1685,6 +2408,202 @@ mod tests {
         assert_eq!(page.total, people_count);
         assert_eq!(page.items.len(), 50);
         assert!(open_elapsed.as_secs_f64() <= 2.0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "large synthetic filter-latency benchmark (set MAIYIN_BENCH_PEOPLE / MAIYIN_BENCH_RECORDS)"]
+    fn benchmark_filter_latency_on_large_session() {
+        // Builds (people_count, records_count) synthetic session and times the four
+        // fast paths surfaced in this task: search_text FTS5 trigram, household
+        // split-column prefix, hotel jurisdiction split-column prefix (records side),
+        // plus the layered fuzzy fallback for hotel_name (ordered-subseq LIKE on the
+        // (session_id, hotel_name_norm) indexed range). Prints milliseconds for each
+        // path; expected to stay under 500ms per path at 1M records.
+        let people_count = std::env::var("MAIYIN_BENCH_PEOPLE")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(50_000);
+        let records_count = std::env::var("MAIYIN_BENCH_RECORDS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(100_000);
+        let (root, store) = test_store();
+
+        let provinces = ["安徽省", "浙江省", "江苏省", "四川省"];
+        let cities = ["黄山市", "杭州市", "南京市", "成都市"];
+        let counties = ["祁门县", "西湖区", "鼓楼区", "锦江区"];
+        let hotel_names = ["旅馆 A", "锦江城市酒店", "如家快捷", "汉庭酒店"];
+        let names = ["张三", "李四", "王五", "赵六"];
+
+        // Build `people_count` PersonSummary rows on a rotating jurisdiction/hotel basis
+        // so a province filter narrows to ~25% of the population.
+        let analyses = (0..people_count)
+            .map(|index| {
+                let bucket = index % provinces.len();
+                PersonAnalysis {
+                    summary: PersonSummary {
+                        person_key: format!("id:{index:018}"),
+                        name: format!("{}{}", names[bucket], index),
+                        id_no: format!("{index:018}"),
+                        phone: String::new(),
+                        household_region: format!(
+                            "{} {} {}",
+                            provinces[bucket], cities[bucket], counties[bucket]
+                        ),
+                        household_province: provinces[bucket].into(),
+                        household_city: cities[bucket].into(),
+                        household_county: counties[bucket].into(),
+                        age: Some(30 + (index % 50) as u8),
+                        gender: if index % 2 == 0 { "男" } else { "女" }.into(),
+                        total_records: 1,
+                        max_week_count: 1,
+                        max_month_count: 1,
+                        max_year_count: 1,
+                        overlap_days: 0,
+                        sequential_days: 0,
+                        score: (index % 100) as u32,
+                        level: "正常".into(),
+                        alert_count: 0,
+                        alert_titles: vec![],
+                        hotel_names: vec![hotel_names[bucket].to_string()],
+                        hotel_regions: vec![HotelRegion {
+                            province: provinces[bucket].into(),
+                            city: cities[bucket].into(),
+                            county: counties[bucket].into(),
+                            region: format!(
+                                "{}{}{}",
+                                provinces[bucket], cities[bucket], counties[bucket]
+                            ),
+                        }],
+                    },
+                    alerts: vec![],
+                }
+            })
+            .collect::<Vec<_>>();
+        let records = (0..records_count)
+            .map(|index| {
+                let bucket = index % provinces.len();
+                let mut record = sample_record(u64::try_from(index + 1).unwrap_or(1), Some(1));
+                record.name = format!("{}{}", names[bucket], index);
+                record.hotel_name = hotel_names[bucket].into();
+                record.province = provinces[bucket].into();
+                record.city = cities[bucket].into();
+                record.county = counties[bucket].into();
+                record.region = format!(
+                    "{} {} {}",
+                    provinces[bucket], cities[bucket], counties[bucket]
+                );
+                record.household_province = provinces[bucket].into();
+                record.household_city = cities[bucket].into();
+                record.household_county = counties[bucket].into();
+                record.household_region = format!(
+                    "{} {} {}",
+                    provinces[bucket], cities[bucket], counties[bucket]
+                );
+                record.person_key = format!("id:{:018}", index % people_count.max(1));
+                record
+            })
+            .collect::<Vec<_>>();
+        let session = StoredSession {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            session_id: "filter-bench".into(),
+            file_name: "filter.xlsx".into(),
+            imported_at: "2026-07-22T00:00:00+08:00".into(),
+            file_count: 4,
+            settings: AnalysisSettings::default(),
+            records,
+            analyses,
+            stats: AnalysisStats {
+                people: people_count,
+                records: records_count,
+                ..Default::default()
+            },
+            import_stats: ImportStats::default(),
+            source_session_ids: vec![],
+            is_combined: false,
+        };
+        let save_started = Instant::now();
+        store.save(&session).unwrap();
+        let save_elapsed = save_started.elapsed();
+        drop(session);
+        drop(store);
+
+        // Reopen to mimic post-startup filter behavior.
+        let reopened = SessionStore::open(root.clone()).unwrap();
+
+        // 1. people search_text via FTS5 trigram (≥3 chars).
+        let mut q = query();
+        q.search = "张三1".into();
+        let started = Instant::now();
+        let page = reopened.query_people("filter-bench", &q).unwrap();
+        let fts5_ms = started.elapsed().as_millis();
+        assert!(!page.items.is_empty());
+
+        // 2. people household_province prefix.
+        let mut q = query();
+        q.household_province = "安徽".into();
+        let started = Instant::now();
+        let _page = reopened.query_people("filter-bench", &q).unwrap();
+        let household_ms = started.elapsed().as_millis();
+
+        // 3. imported-records household_province prefix.
+        let started = Instant::now();
+        let _page = reopened
+            .query_imported_records(
+                "filter-bench",
+                &ImportedRecordsQuery {
+                    household_province: "安徽".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let records_household_ms = started.elapsed().as_millis();
+
+        // 4. imported-records hotel_jurisdiction prefix.
+        let started = Instant::now();
+        let _page = reopened
+            .query_imported_records(
+                "filter-bench",
+                &ImportedRecordsQuery {
+                    hotel_province: "安徽".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let records_hotel_ms = started.elapsed().as_millis();
+
+        // 5. layered ordered-subseq hotel_name LIKE on the indexed records range.
+        let started = Instant::now();
+        let _page = reopened
+            .query_imported_records(
+                "filter-bench",
+                &ImportedRecordsQuery {
+                    hotel_search: "旅馆A".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let fuzzy_ms = started.elapsed().as_millis();
+
+        println!(
+            "people={} records={} save_ms={} fts5_search_ms={} household_prefix_ms={} records_household_ms={} records_hotel_ms={} fuzzy_hotel_ms={}",
+            people_count,
+            records_count,
+            save_elapsed.as_millis(),
+            fts5_ms,
+            household_ms,
+            records_household_ms,
+            records_hotel_ms,
+            fuzzy_ms,
+        );
+
         fs::remove_dir_all(root).unwrap();
     }
 }

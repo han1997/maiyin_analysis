@@ -152,6 +152,12 @@ pub struct PersonSummary {
     pub id_no: String,
     pub phone: String,
     pub household_region: String,
+    #[serde(default)]
+    pub household_province: String,
+    #[serde(default)]
+    pub household_city: String,
+    #[serde(default)]
+    pub household_county: String,
     pub age: Option<u8>,
     pub gender: String,
     pub total_records: usize,

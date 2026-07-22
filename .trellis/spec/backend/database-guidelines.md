@@ -23,7 +23,7 @@ SessionStore::move_to(destination_root: PathBuf) -> Result<SessionStore, AppErro
 ```
 
 The database is `<storageRoot>/MaiyinAnalysisData/history-v1.sqlite3` and uses
-`PRAGMA user_version = 3`. The file name remains stable while `user_version`
+`PRAGMA user_version = 4`. The file name remains stable while `user_version`
 owns schema compatibility.
 
 ### 3. Contracts
@@ -41,7 +41,23 @@ owns schema compatibility.
   without decoding `record_json`. Records are loaded in full only for reanalysis,
   merge, or export.
 - `people` stores query columns plus one `PersonSummary` JSON payload. Normalized hotel
-  names, shared-stay hotel regions, and alerts live in child tables.
+  names, household split columns, shared-stay hotel regions, and alerts live in child
+  tables.
+- Free-text search uses contentless FTS5 trigram tables (`records_search_fts` and
+  `people_search_fts`) for normalized queries of three or more characters. One- and
+  two-character queries keep the `LIKE '%x%'` fallback for correctness. The FTS rowid
+  must mirror the real SQLite table `rowid`, not business `uid` or `person_key`;
+  business IDs are session-local and are not valid FTS join keys.
+- Hotel and household jurisdiction filters use normalized split columns with prefix
+  range semantics (`column >= x AND column < x || max_unicode`) so B-tree indexes can
+  serve them reliably. Do not reintroduce
+  `household_region_norm LIKE '%x%'`, `search_text LIKE '%x%'` for long queries, or
+  OR conditions against concatenated region text on ordinary paginated paths.
+- `record_filter_counts` stores per-session counts for non-empty, non-null-check-in
+  imported records by `filter_kind` and normalized value. It may answer exact totals
+  only for safe single-field imported-record filters without selected time windows or
+  other narrowing filters; all combined filters fall back to normal SQLite `COUNT(*)`.
+  Replacing a session must replace these counts in the same save transaction.
 - Saves use one SQLite transaction and prepared statements. Replacing a session first
   deletes its prior rows inside the same transaction, so a later failure rolls back to
   the previous complete session.
@@ -51,10 +67,10 @@ owns schema compatibility.
   or newline. Each term becomes an ordered fuzzy `LIKE` pattern and every term must
   match one normalized hotel row.
 - Province/city/county hotel filters are evaluated inside one correlated region row.
-- Database versions `1` and `2` are both cleared and rebuilt as version `3` — the user
+- Database versions `1`, `2`, and `3` are cleared and rebuilt as version `4` — the user
   chose re-import over migration. `initialize_schema` calls `reset_legacy_database` for
-  either legacy version, which drops all application tables, resets `user_version = 0`,
-  then recreates the v3 schema, rather than backfilling structured columns from
+  any legacy version, which drops all application tables and FTS tables, resets
+  `user_version = 0`, then recreates the v4 schema, rather than backfilling columns from
   `record_json`. Any other nonzero unsupported `user_version` is rejected. Legacy JSON
   session files and `index.json` are not read or migrated.
 - Schema changes prefer "clear old data + re-import" over writing migration/backfill
@@ -72,12 +88,13 @@ owns schema compatibility.
 | Condition | Result |
 | --- | --- |
 | Missing session or person | `session_not_found` or `validation_error` |
-| Unsupported nonzero database version other than `1` | `storage_error` naming both versions |
+| Unsupported nonzero database version other than `1`, `2`, or `3` | `storage_error` naming both versions |
 | Duplicate row or serialization failure during save | Transaction rolls back; prior session remains readable |
 | Page size below 1 or above 500 | Clamp to `1..=500` |
 | Missing record check-in | Exclude it from imported-record pages and counts |
-| Database `user_version = 1` | Drop the old application tables, create schema version `3`, and return an empty history list |
-| Database `user_version = 2` | Drop the old application tables, create schema version `3`, and return an empty history list |
+| Database `user_version = 1` | Drop the old application tables, create schema version `4`, and return an empty history list |
+| Database `user_version = 2` | Drop the old application tables, create schema version `4`, and return an empty history list |
+| Database `user_version = 3` | Drop the old application and FTS tables, create schema version `4`, and return an empty history list |
 | Destination already contains `history-v1.sqlite3` | `storage_error`; never overwrite it |
 | Legacy JSON files exist beside the database | Ignore them; do not import or delete them automatically |
 
@@ -88,6 +105,12 @@ owns schema compatibility.
 - Good: opening imported records returns one 50-row `ImportedRecordsPage`; start/end
   boundaries are evaluated against indexed `check_in` values in SQLite.
 - Good: `A，B` creates two correlated hotel `EXISTS` clauses and requires both.
+- Good: `query.search = "祁门县"` uses FTS5 trigram and joins back by SQLite `rowid`;
+  `query.search = "祁"` uses the short-query `LIKE` fallback.
+- Good: `householdProvince = "安徽"` matches `安徽省`; `householdProvince = "省"` does
+  not match under prefix semantics.
+- Good: a single `ImportedRecordsQuery.householdProvince = "安徽"` can get `total`
+  from `record_filter_counts`, then fetch rows from `records` ordered by `check_in, uid`.
 - Base: export calls `load` in a blocking worker and reconstructs the full session only
   because the export format needs all rows.
 - Bad: adding `Vec<PersonSummary>` back to `WorkspaceSnapshot` or decoding every record
@@ -96,7 +119,11 @@ owns schema compatibility.
   Rust iterator filter, because JSON decode and IPC again scale with the whole history.
 - Bad: copying the live database without a WAL checkpoint or overwriting a destination
   database selected by the user.
-- Bad: writing a v2→v3 backfill that scans every `record_json` row inside one startup
+- Bad: using `uid` as `records_search_fts.rowid`; uid is only a session-local business
+  value and can diverge from `records.rowid` or collide across sessions.
+- Bad: using `record_filter_counts` for combined filters such as province + age, selected
+  time windows, or exclude-household filters; those need exact row-level predicates.
+- Bad: writing a v3→v4 backfill that scans every `record_json` row inside one startup
   transaction, because it blocks the Tauri main thread for a 453k-row history and white
   screens; clear the database instead.
 
@@ -108,12 +135,18 @@ owns schema compatibility.
 - Assert imported-record total, `1..=500` page-size clamping, stable
   `check_in ASC, uid ASC` ordering, time boundaries, and missing-check-in exclusion.
 - Set a populated database to `user_version = 1`, reopen it, and assert history is empty
-  and `user_version = 3`.
+  and `user_version = 4`.
 - Set a populated database to `user_version = 2`, reopen it, and assert history is
-  empty and `user_version = 3`.
+  empty and `user_version = 4`.
+- Set a populated database to `user_version = 3`, reopen it, and assert history is
+  empty and `user_version = 4`.
 - Assert imported-record result filters (hotel name, hotel jurisdiction, household
   include/exclude, age range, gender, keyword search) are applied in SQLite.
 - Assert household include/exclude, age, gender, risk, alert-state, and search behavior.
+- Assert FTS search works when a record's business `uid` does not equal its SQLite
+  rowid.
+- Assert replacing a session also replaces `record_filter_counts`; stale aggregate
+  counts must not survive.
 - Inject a duplicate-key save failure and assert the previous session remains intact.
 - Delete the active session and assert the next listed session becomes active.
 - Move storage and assert the copied database can list and fully load the session.

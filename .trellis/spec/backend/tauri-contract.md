@@ -213,6 +213,14 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   accepts `level` or `alertState` because imported records have no risk attributes.
   All filter fields use `#[serde(default)]` so older callers omitting them keep working.
   Snapshots and commands never transfer every raw row through IPC for ordinary browsing.
+- Free-text `search` uses backend FTS5 trigram for normalized values of three or more
+  characters, with a short-query fallback for one or two characters. Hotel and
+  household province/city/county filters are prefix matches implemented as range
+  predicates against split normalized columns, not arbitrary substring matches against
+  concatenated region text.
+- Imported-record `total` may be answered from backend aggregate counts for safe
+  single-field filters; combined filters and selected time windows still use exact
+  row-level SQLite predicates.
 - `PersonSummary` includes `maxWeekCount`, `maxMonthCount`, `maxYearCount`,
   `hotelNames`, and `hotelRegions`. Each hotel-region entry is
   `{ province, city, county, region }`; persisted additions use serde defaults.
@@ -221,7 +229,7 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   hotel name (AND across terms).
 - Populated province/city/county filters must match one shared `hotelRegions`
   entry; never combine components from different stays.
-- Stored session payloads use schema version `4` inside SQLite database version `3`.
+- Stored session payloads use schema version `4` inside SQLite database version `4`.
   This release starts from an empty database and provides no legacy JSON upgrade path.
 - React never computes scores. Selected-window and rolling frequency scoring
   remain mutually exclusive in Rust.
@@ -238,8 +246,9 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 | Result-filter minimum age exceeds maximum age | Frontend toast; do not update the applied query or call Rust |
 | Missing check-in | Exclude from time-window analysis |
 | Old summary lacks `hotelRegions` | Deserialize to an empty list via serde default |
-| SQLite `user_version = 1` | Drop application tables, recreate schema version `3`, and return an empty history list; the user re-imports source files |
-| SQLite `user_version = 2` | Drop application tables, recreate schema version `3`, and return an empty history list; the user re-imports source files |
+| SQLite `user_version = 1` | Drop application tables, recreate schema version `4`, and return an empty history list; the user re-imports source files |
+| SQLite `user_version = 2` | Drop application tables, recreate schema version `4`, and return an empty history list; the user re-imports source files |
+| SQLite `user_version = 3` | Drop application and FTS tables, recreate schema version `4`, and return an empty history list; the user re-imports source files |
 | Other nonzero unsupported SQLite version | `storage_error`; do not attempt an implicit migration |
 
 ### 5. Good / Base / Bad Cases
@@ -255,6 +264,10 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   of deserializing and sending all 453k rows.
 - Good: applying a hotel-name or household filter to imported records narrows the
   SQLite query and returns one filtered page without decoding `record_json`.
+- Good: `search = "祁门县"` takes the FTS5 trigram path; `search = "祁"` remains
+  correct through the short-query fallback.
+- Good: `hotelProvince = "安徽"` matches `安徽省`; `hotelProvince = "省"` does not match
+  because jurisdiction filters are prefix-based.
 - Bad: adding province, household, age, or gender back to `AnalysisSettings`,
   because this changes the evidence set and reintroduces slow searches.
 - Bad: matching province from one stay and county from another; all populated
@@ -278,8 +291,9 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   jurisdiction, household include/exclude, age range, gender, keyword search) applied
   in SQLite.
 - A populated database at `user_version = 1` or `user_version = 2` reopens empty at
-  `user_version = 3` (cleared, not migrated); structured filter columns are populated
-  at save time, never via a startup backfill.
+  `user_version = 4` (cleared, not migrated); structured filter columns and FTS tables
+  are populated at save time, never via a startup backfill.
+- A populated database at `user_version = 3` reopens empty at `user_version = 4`.
 - Legacy settings ignore removed analysis fields, and missing `hotelRegions` defaults safely.
 - Frontend build asserts all camelCase DTO fields.
 
