@@ -438,3 +438,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: 优化多文件导入合并性能
+
+**Date**: 2026-07-22
+**Task**: 优化多文件导入合并性能
+**Branch**: `main`
+
+### Summary
+
+完成多文件导入性能优化：拆分 parse/merge benchmark，合并阶段改为预分配容器和结构化 DeduplicationKey；15x20000 合成 CSV release benchmark 中 merge 从 948ms 降至 289ms，并通过完整质量门。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f12a11b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
