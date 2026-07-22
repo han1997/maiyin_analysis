@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~306 | Active |
+| `journal-1.md` | ~341 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-07-22 | 修复筛选弹窗显示并增强人员核查详情对比 | `7748838`, `d4b57d9`, `089affd` | `main` |
 | 9 | 2026-07-22 | 简化分析参数并优化结果表交互 | `856fb75` | `main` |
 | 8 | 2026-07-22 | 修复导入记录分页与视图切换 | `b8b99d6` | `main` |
 | 7 | 2026-07-22 | Optimize import and history performance | `c3b65c7`, `10f32cf` | `main` |

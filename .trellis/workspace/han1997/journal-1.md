@@ -304,3 +304,38 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: 修复筛选弹窗显示并增强人员核查详情对比
+
+**Date**: 2026-07-22
+**Task**: 修复筛选弹窗显示并增强人员核查详情对比
+**Branch**: `main`
+
+### Summary
+
+修复更多筛选弹窗右缘溢出视口导致的横向滚动与回弹（桌面右锚定、窄屏左锚定）；为人员核查详情新增最大化按钮（Escape 退出最大化、关闭重置）、预警↔证据联动（按 evidenceIds↔uid 过滤、全部证据恢复、空证据提示）与最大化视图下的证据并排网格；补齐 TS AlertSummary.evidenceIds 与后端契约；并将 AGENTS.md 中文沟通偏好、.opencode 平台脚手架忽略一并入库。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7748838` | (see git log) |
+| `d4b57d9` | (see git log) |
+| `089affd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
