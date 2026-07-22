@@ -405,3 +405,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: 优化历史筛选查询性能
+
+**Date**: 2026-07-22
+**Task**: 优化历史筛选查询性能
+**Branch**: `main`
+
+### Summary
+
+完成数据导入记录与结果筛选性能优化：SQLite schema v4、FTS5 trigram、prefix range、record_filter_counts 聚合计数；1M release benchmark 达标并通过后端/前端质量门。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5c5cf5c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
