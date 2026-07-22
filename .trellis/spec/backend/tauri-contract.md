@@ -316,8 +316,10 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   hotel name (AND across terms).
 - Populated province/city/county filters must match one shared `hotelRegions`
   entry; never combine components from different stays.
-- Stored session payloads use schema version `4` inside SQLite database version `4`.
-  This release starts from an empty database and provides no legacy JSON upgrade path.
+- Stored session payloads keep model schema version `4` inside SQLite database version
+  `5`. Database v4→v5 is lossless and keeps old sessions searchable; database versions
+  1–3 are cleared for source-file re-import. Legacy standalone JSON history still has no
+  automatic upgrade path.
 - React never computes scores. Selected-window and rolling frequency scoring
   remain mutually exclusive in Rust.
 - Scores are: overlap `min(35, 20 + P*2 + D*5)`, same-day-many
@@ -333,9 +335,10 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 | Result-filter minimum age exceeds maximum age | Frontend toast; do not update the applied query or call Rust |
 | Missing check-in | Exclude from time-window analysis |
 | Old summary lacks `hotelRegions` | Deserialize to an empty list via serde default |
-| SQLite `user_version = 1` | Drop application tables, recreate schema version `4`, and return an empty history list; the user re-imports source files |
-| SQLite `user_version = 2` | Drop application tables, recreate schema version `4`, and return an empty history list; the user re-imports source files |
-| SQLite `user_version = 3` | Drop application and FTS tables, recreate schema version `4`, and return an empty history list; the user re-imports source files |
+| SQLite `user_version = 1` | Drop application tables, recreate database version `5`, and return an empty history list; the user re-imports source files |
+| SQLite `user_version = 2` | Drop application tables, recreate database version `5`, and return an empty history list; the user re-imports source files |
+| SQLite `user_version = 3` | Drop application and FTS tables, recreate database version `5`, and return an empty history list; the user re-imports source files |
+| SQLite `user_version = 4` | Preserve rows/search, add compact v2 FTS, and upgrade to database version `5` |
 | Other nonzero unsupported SQLite version | `storage_error`; do not attempt an implicit migration |
 
 ### 5. Good / Base / Bad Cases
@@ -378,9 +381,11 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   jurisdiction, household include/exclude, age range, gender, keyword search) applied
   in SQLite.
 - A populated database at `user_version = 1` or `user_version = 2` reopens empty at
-  `user_version = 4` (cleared, not migrated); structured filter columns and FTS tables
+  `user_version = 5` (cleared, not migrated); structured filter columns and FTS tables
   are populated at save time, never via a startup backfill.
-- A populated database at `user_version = 3` reopens empty at `user_version = 4`.
+- A populated database at `user_version = 3` reopens empty at `user_version = 5`.
+- A populated database at `user_version = 4` reopens with all rows searchable at
+  `user_version = 5`.
 - Legacy settings ignore removed analysis fields, and missing `hotelRegions` defaults safely.
 - Frontend build asserts all camelCase DTO fields.
 

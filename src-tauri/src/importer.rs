@@ -210,7 +210,9 @@ fn parse_file(path: &Path) -> Result<ParsedFile, AppError> {
     };
 
     let mut stats = ImportStats::default();
-    let mut records = Vec::new();
+    let mut records = Vec::with_capacity(rows.len().saturating_sub(data_start));
+    let source_file = file_name(path);
+    let today = Local::now().date_naive();
     for (row_index, row) in rows.iter().enumerate().skip(data_start) {
         if row.iter().all(|value| value.trim().is_empty()) {
             continue;
@@ -253,13 +255,12 @@ fn parse_file(path: &Path) -> Result<ParsedFile, AppError> {
         };
         let birth = identity_birth_date(&id_no)
             .or_else(|| parse_date(&pick(row, indexes.get("birth_date"))));
-        let age = parse_age(&pick(row, indexes.get("age")))
-            .or_else(|| calculate_age(birth, Local::now().date_naive()));
+        let age = parse_age(&pick(row, indexes.get("age"))).or_else(|| calculate_age(birth, today));
         let gender = normalize_gender(&pick(row, indexes.get("gender")), &id_no);
 
         records.push(Record {
             uid: 0,
-            source_file: file_name(path),
+            source_file: source_file.clone(),
             source_row: row_index + 1,
             name: pick(row, indexes.get("name")),
             id_no: id_no.clone(),
@@ -427,11 +428,14 @@ fn read_csv(path: &Path) -> Result<Vec<Vec<String>>, AppError> {
         decode_utf16(&bytes[2..], true)
     } else if bytes.starts_with(&[0xfe, 0xff]) {
         decode_utf16(&bytes[2..], false)
-    } else if let Ok(text) = String::from_utf8(bytes.clone()) {
-        text
     } else {
-        let (text, _, _) = GBK.decode(&bytes);
-        text.into_owned()
+        match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(error) => {
+                let (text, _, _) = GBK.decode(error.as_bytes());
+                text.into_owned()
+            }
+        }
     };
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
@@ -483,10 +487,7 @@ fn compile_field_indexes(headers: &[String]) -> FieldIndexes {
         .collect();
     let mut result = empty_indexes();
     for field in FIELDS {
-        let aliases = aliases(field)
-            .iter()
-            .map(|value| normalize_header(value))
-            .collect::<Vec<_>>();
+        let aliases = &normalized_aliases()[field];
         let exact = normalized
             .iter()
             .enumerate()
@@ -509,6 +510,24 @@ fn compile_field_indexes(headers: &[String]) -> FieldIndexes {
         result.insert(field, fuzzy);
     }
     result
+}
+
+fn normalized_aliases() -> &'static HashMap<&'static str, Vec<String>> {
+    static NORMALIZED: OnceLock<HashMap<&'static str, Vec<String>>> = OnceLock::new();
+    NORMALIZED.get_or_init(|| {
+        FIELDS
+            .into_iter()
+            .map(|field| {
+                (
+                    field,
+                    aliases(field)
+                        .iter()
+                        .map(|value| normalize_header(value))
+                        .collect(),
+                )
+            })
+            .collect()
+    })
 }
 
 fn detect_template_data_start(rows: &[Vec<String>]) -> Option<usize> {

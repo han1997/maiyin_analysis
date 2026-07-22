@@ -17,6 +17,7 @@ calamine = { version = "0.36.0", features = ["dates"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 csv = "1.4.0"
 encoding_rs = "0.8.35"
+lz4_flex = { version = "0.14.0", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 rust_xlsxwriter = "0.96.0"
 regex = "1.12.2"
 rayon = "1.10.0"

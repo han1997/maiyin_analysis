@@ -24,7 +24,7 @@ SessionStore::move_to(destination_root: PathBuf) -> Result<SessionStore, AppErro
 ```
 
 The database is `<storageRoot>/MaiyinAnalysisData/history-v1.sqlite3` and uses
-`PRAGMA user_version = 4`. The file name remains stable while `user_version`
+`PRAGMA user_version = 5`. The file name remains stable while `user_version`
 owns schema compatibility.
 
 ### 3. Contracts
@@ -40,18 +40,23 @@ owns schema compatibility.
   `household_county_norm`, `age`, `gender`, `search_text`) are populated from the
   `Record` fields at save time so the imported-record view can filter in SQLite
   without decoding `record_json`. Records are loaded in full only for reanalysis,
-  merge, or export.
-- `people` stores query columns plus one `PersonSummary` JSON payload. Normalized hotel
+  merge, or export. New payloads are safe-LZ4 blocks stored as BLOB with the `MYL4`
+  magic; readers must continue accepting legacy JSON TEXT and plain JSON BLOB values.
+- `people` stores query columns plus one `PersonSummary` JSON payload. New summary
+  payloads use the same `MYL4` BLOB format and legacy-compatible reader. Normalized hotel
   names, household split columns, shared-stay hotel regions, and alerts live in child
   tables.
-- Free-text search uses contentless FTS5 trigram tables (`records_search_fts` and
-  `people_search_fts`) for normalized queries of three or more characters. One- and
-  two-character queries keep the `LIKE '%x%'` fallback for correctness. The FTS rowid
-  must mirror the real SQLite table `rowid`, not business `uid` or `person_key`;
-  business IDs are session-local and are not valid FTS join keys.
-- Contentless FTS rows must be deleted by their mirrored source-table `rowid` before
-  deleting the corresponding `records`, `people`, or hotel rows. Their UNINDEXED
-  `session_id` value is not a reliable read/delete predicate, so
+- Version-4 sessions remain searchable through contentless FTS5 trigram tables
+  (`records_search_fts` and `people_search_fts`). Version-5 saves write compact
+  external-content tables (`records_search_fts_v2` and `people_search_fts_v2`) with
+  `detail=none` and `columnsize=0`; queries union both generations. Long normalized
+  searches AND their overlapping three-character tokens to obtain candidates, then
+  confirm exact substring semantics with source-table `LIKE`. One- and two-character
+  queries keep the direct `LIKE '%x%'` fallback. Every FTS rowid mirrors the real source
+  table `rowid`, never business `uid` or `person_key`.
+- Both contentless and external-content FTS rows must be deleted by their mirrored
+  source-table `rowid` before deleting the corresponding source rows. The old tables'
+  UNINDEXED `session_id` is not a reliable read/delete predicate, so
   `DELETE FROM <fts> WHERE session_id = ?` can silently leave documents behind.
 - Hotel and household jurisdiction filters use normalized split columns with prefix
   range semantics (`column >= x AND column < x || max_unicode`) so B-tree indexes can
@@ -63,21 +68,33 @@ owns schema compatibility.
   only for safe single-field imported-record filters without selected time windows or
   other narrowing filters; all combined filters fall back to normal SQLite `COUNT(*)`.
   Replacing a session must replace these counts in the same save transaction.
-- Saves use one SQLite transaction and prepared statements. Replacing a session first
-  deletes its prior rows inside the same transaction, so a later failure rolls back to
-  the previous complete session.
+- Saves use one SQLite transaction. JSON/normalization preparation is split into 4,096-row
+  Rayon chunks and overlaps the current SQLite write through a capacity-one bounded
+  channel. Multi-row INSERT statements stay at or below 900 bound variables; FTS is
+  populated with transaction-local `INSERT ... SELECT`. Replacing a session first deletes
+  its prior rows inside the same transaction, so a preparation, compression, constraint,
+  or FTS failure rolls back to the previous complete session.
+- New database files set `page_size=16384` before entering WAL and bulk-save connections
+  use an on-demand cache capped at 128 MiB. Existing version-4/version-5 files keep their
+  current page size; never run startup `VACUUM` merely to change it. Keep
+  `journal_mode=WAL` and `synchronous=NORMAL`; performance work must not lower durability.
+- Do not create explicit indexes that exactly duplicate a composite primary key or only
+  repeat its left-most lookup prefix. `person_hotels`, `person_hotel_regions`, and
+  `record_filter_counts` use their primary-key auto-indexes for these paths.
 - Ordinary result browsing performs filter, count, deterministic sort, and pagination
   in SQLite. The sort key is `score DESC, total_records DESC, name ASC, person_key ASC`.
 - Multiple hotel terms are split on comma, Chinese comma, enumeration comma, semicolon,
   or newline. Each term becomes an ordered fuzzy `LIKE` pattern and every term must
   match one normalized hotel row.
 - Province/city/county hotel filters are evaluated inside one correlated region row.
-- Database versions `1`, `2`, and `3` are cleared and rebuilt as version `4` — the user
+- Database versions `1`, `2`, and `3` are cleared and rebuilt as version `5` — the user
   chose re-import over migration. `initialize_schema` calls `reset_legacy_database` for
   any legacy version, which drops all application tables and FTS tables, resets
-  `user_version = 0`, then recreates the v4 schema, rather than backfilling columns from
-  `record_json`. Any other nonzero unsupported `user_version` is rejected. Legacy JSON
-  session files and `index.json` are not read or migrated.
+  `user_version = 0`, then recreates the v5 schema, rather than backfilling columns from
+  `record_json`. Version `4` upgrades losslessly to version `5`: old FTS rows remain, new
+  compact FTS tables are added, and future saves use v2. Any other nonzero unsupported
+  `user_version` is rejected. Legacy JSON session files and `index.json` are not read or
+  migrated.
 - Schema changes prefer "clear old data + re-import" over writing migration/backfill
   code. A backfill that scans `record_json` for hundreds of thousands of rows holds a
   write transaction and blocks the Tauri main thread (synchronous `bootstrap_workspace`),
@@ -90,7 +107,8 @@ owns schema compatibility.
   take a read guard; save, activate, delete, and storage movement take a write guard so a
   database-file reset cannot race an open query connection.
 - Deleting the final listed session checkpoints WAL, removes the database plus exact
-  `-wal`, `-shm`, and rollback-journal sidecars, then recreates an empty version-4 schema.
+  `-wal`, `-shm`, and rollback-journal sidecars, then recreates an empty version-5 schema
+  with 16 KiB pages.
   Transient unlisted combined sessions are discarded with it. When other listed sessions
   remain, delete only the target session: remove its FTS rows by source rowid, explicitly
   clear current child tables, preserve other sessions, and select the next active session.
@@ -105,17 +123,19 @@ owns schema compatibility.
 | Condition | Result |
 | --- | --- |
 | Missing session or person | `session_not_found` or `validation_error` |
-| Unsupported nonzero database version other than `1`, `2`, or `3` | `storage_error` naming both versions |
-| Duplicate row or serialization failure during save | Transaction rolls back; prior session remains readable |
+| Unsupported nonzero database version other than `1`, `2`, `3`, `4`, or `5` | `storage_error` naming both versions |
+| Duplicate row, serialization/compression failure, or FTS failure during save | Transaction rolls back; prior session remains readable |
+| Corrupt `MYL4` payload | `storage_error`; never return a partial decoded session/page |
 | Page size below 1 or above 500 | Clamp to `1..=500` |
 | Missing record check-in | Exclude it from imported-record pages and counts |
-| Database `user_version = 1` | Drop the old application tables, create schema version `4`, and return an empty history list |
-| Database `user_version = 2` | Drop the old application tables, create schema version `4`, and return an empty history list |
-| Database `user_version = 3` | Drop the old application and FTS tables, create schema version `4`, and return an empty history list |
+| Database `user_version = 1` | Drop the old application tables, create database version `5`, and return an empty history list |
+| Database `user_version = 2` | Drop the old application tables, create database version `5`, and return an empty history list |
+| Database `user_version = 3` | Drop the old application and FTS tables, create database version `5`, and return an empty history list |
+| Database `user_version = 4` | Preserve all rows, add compact v2 FTS tables, drop redundant indexes, and set `user_version = 5` |
 | Destination already contains `history-v1.sqlite3` | `storage_error`; never overwrite it |
 | Legacy JSON files exist beside the database | Ignore them; do not import or delete them automatically |
 | Delete target does not exist | `session_not_found`; preserve all rows and files |
-| Delete target is the final listed session | Recreate a small empty version-4 database and return no active metadata |
+| Delete target is the final listed session | Recreate a small empty version-5 database and return no active metadata |
 | File-level reset cannot acquire/checkpoint/remove the file | Fall back to transactional row deletion when the original database remains usable |
 
 ### 5. Good / Base / Bad Cases
@@ -133,6 +153,11 @@ owns schema compatibility.
   from `record_filter_counts`, then fetch rows from `records` ordered by `check_in, uid`.
 - Good: deleting the only visible 1.6 GB session replaces the database file instead of
   writing hundreds of thousands of cascade tombstones; the next import saves normally.
+- Good: a new large-session save pipelines bounded preparation with multi-row INSERT,
+  writes only compact v2 FTS, commits under `WAL + synchronous=NORMAL`, and stores
+  compressed payloads without changing query DTOs.
+- Good: opening a populated version-4 database preserves its rows and old search index,
+  adds version-5 tables/index cleanup, and accepts a new compressed save.
 - Base: deleting one of several listed sessions runs on the blocking worker, removes its
   base/child/FTS rows, and keeps the other sessions queryable.
 - Base: export calls `load` in a blocking worker and reconstructs the full session only
@@ -147,9 +172,13 @@ owns schema compatibility.
   value and can diverge from `records.rowid` or collide across sessions.
 - Bad: using `record_filter_counts` for combined filters such as province + age, selected
   time windows, or exclude-household filters; those need exact row-level predicates.
-- Bad: writing a v3→v4 backfill that scans every `record_json` row inside one startup
+- Bad: writing a v1/v2/v3→v5 backfill that scans every `record_json` row inside one startup
   transaction, because it blocks the Tauri main thread for a 453k-row history and white
   screens; clear the database instead.
+- Bad: setting `synchronous=OFF`, disabling WAL checkpoint work without an end-to-end
+  measurement, or changing an existing database page size through startup `VACUUM`.
+- Bad: preparing the entire session before opening the transaction; compressed payloads
+  for hundreds of thousands of rows must remain chunked and bounded.
 
 - Bad: deleting contentless FTS rows with `WHERE session_id = ?`, or deleting the shared
   database file while another listed session must be retained.
@@ -157,16 +186,22 @@ owns schema compatibility.
 ### 6. Tests Required
 
 - Round-trip session metadata, people, alerts, and records through SQLite.
+- Assert new record/summary payloads are `MYL4` BLOBs, decode correctly, and legacy
+  JSON TEXT rows remain readable.
+- Assert a newly created database uses 16 KiB pages; do not require existing v4 files
+  to change page size.
 - Assert person count, page size, stable ordering, multi-hotel AND fuzzy matching, and
   same-row jurisdiction matching.
 - Assert imported-record total, `1..=500` page-size clamping, stable
   `check_in ASC, uid ASC` ordering, time boundaries, and missing-check-in exclusion.
 - Set a populated database to `user_version = 1`, reopen it, and assert history is empty
-  and `user_version = 4`.
+  and `user_version = 5`.
 - Set a populated database to `user_version = 2`, reopen it, and assert history is
-  empty and `user_version = 4`.
+  empty and `user_version = 5`.
 - Set a populated database to `user_version = 3`, reopen it, and assert history is
-  empty and `user_version = 4`.
+  empty and `user_version = 5`.
+- Set a populated database to `user_version = 4`, reopen it, and assert rows/search
+  remain available while `user_version = 5` and the compact v2 FTS tables exist.
 - Assert imported-record result filters (hotel name, hotel jurisdiction, household
   include/exclude, age range, gender, keyword search) are applied in SQLite.
 - Assert household include/exclude, age, gender, risk, alert-state, and search behavior.
@@ -179,12 +214,13 @@ owns schema compatibility.
 - Delete one of multiple sessions and assert its FTS rowids are absent while the other
   session's FTS rowids remain.
 - Delete the final listed session with a transient combined session present; assert the
-  store reopens empty at version 4 and accepts a new save.
+  store reopens empty at version 5 and accepts a new save.
 - Reopen an oversized empty database and assert stale tables/data are removed and the
   physical database file shrinks.
 - Move storage and assert the copied database can list and fully load the session.
-- Keep ignored release benchmarks for 453,506-person first-page opening and 15-file
-  parallel parsing; record measured output in the active task research artifact.
+- Keep ignored release benchmarks for the representative 352,948-person / 453,506-record
+  save, large-history first-page opening, and multi-file parsing; record measured output
+  and page-size comparisons in the active task research artifact.
 
 ### 7. Wrong vs Correct
 
@@ -218,3 +254,29 @@ DELETE FROM records_search_fts WHERE session_id = ?;
 DELETE FROM records_search_fts
 WHERE rowid IN (SELECT rowid FROM records WHERE session_id = ?);
 ```
+
+#### Wrong: unbounded preparation and per-row secondary writes
+
+```rust
+let prepared = session.records.iter().map(prepare).collect::<Vec<_>>();
+for row in prepared {
+    insert_record(row)?;
+    insert_fts(row)?;
+}
+```
+
+#### Correct: bounded pipeline, multi-row base INSERT, then bulk FTS
+
+```rust
+for prepared_chunk in bounded_preparation_pipeline(session.records.chunks(4_096)) {
+    insert_record_batches(&transaction, &session.session_id, &prepared_chunk)?;
+}
+transaction.execute(
+    "INSERT INTO records_search_fts_v2(rowid, search_text) \
+     SELECT rowid, search_text FROM records WHERE session_id = ?1",
+    [&session.session_id],
+)?;
+```
+
+The bounded form overlaps CPU preparation with SQLite work, caps live payload memory,
+and preserves one-transaction rollback semantics.

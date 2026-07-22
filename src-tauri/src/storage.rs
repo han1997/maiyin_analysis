@@ -4,22 +4,38 @@ use crate::model::{
     ImportedRecordsQuery, PersonAnalysis, PersonDetail, PersonPage, PersonQuery, PersonSummary,
     Record, SessionSummary, StoredSession,
 };
-use rusqlite::{
-    params, params_from_iter, types::Value, Connection, OptionalExtension, Transaction,
+use lz4_flex::block::{
+    compress_into_with_table, decompress_size_prepended, get_maximum_output_size, CompressTable,
 };
+use rayon::prelude::*;
+use rusqlite::{
+    params, params_from_iter, types::Value, Connection, OptionalExtension, ToSql, Transaction,
+};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+#[cfg(test)]
+use std::time::Instant;
 
 const DATA_FOLDER: &str = "MaiyinAnalysisData";
 const DATABASE_FILE: &str = "history-v1.sqlite3";
-const DATABASE_VERSION: i64 = 4;
+const DATABASE_VERSION: i64 = 5;
 const EMPTY_DATABASE_RESET_THRESHOLD_BYTES: u64 = 8 * 1024 * 1024;
-const SESSION_FTS_TABLES: [(&str, &str); 4] = [
+const BULK_SAVE_CACHE_KIB: i64 = 128 * 1024;
+const DATABASE_PAGE_SIZE: i64 = 16 * 1024;
+const SAVE_PREPARE_CHUNK_SIZE: usize = 4_096;
+// Keep generated multi-row INSERT statements below SQLite's historical 999-variable
+// default as well as the higher limit used by the bundled build.
+const BULK_INSERT_VARIABLE_LIMIT: usize = 900;
+const COMPRESSED_JSON_MAGIC: &[u8; 4] = b"MYL4";
+const SESSION_FTS_TABLES: [(&str, &str); 6] = [
     ("records_search_fts", "records"),
     ("people_search_fts", "people"),
+    ("records_search_fts_v2", "records"),
+    ("people_search_fts_v2", "people"),
     ("records_hotel_name_fts", "records"),
     ("person_hotels_name_fts", "person_hotels"),
 ];
@@ -43,6 +59,46 @@ pub struct SessionMetadata {
     pub import_stats: ImportStats,
     pub source_session_ids: Vec<String>,
     pub is_combined: bool,
+}
+
+struct PreparedRecord<'a> {
+    record: &'a Record,
+    uid: i64,
+    check_in: Option<String>,
+    record_json: Vec<u8>,
+    name_norm: String,
+    id_no_norm: String,
+    phone_norm: String,
+    hotel_name_norm: String,
+    hotel_province_norm: String,
+    hotel_city_norm: String,
+    hotel_county_norm: String,
+    household_region_norm: String,
+    household_province_norm: String,
+    household_city_norm: String,
+    household_county_norm: String,
+    age: Option<i64>,
+    search_text: String,
+}
+
+struct PreparedPerson<'a> {
+    analysis: &'a PersonAnalysis,
+    summary_json: Vec<u8>,
+    name_norm: String,
+    id_no_norm: String,
+    phone_norm: String,
+    household_region_norm: String,
+    household_province_norm: String,
+    household_city_norm: String,
+    household_county_norm: String,
+    age: Option<i64>,
+    alert_count: i64,
+    total_records: i64,
+    score: i64,
+    search_text: String,
+    alert_json: Vec<String>,
+    hotel_names_norm: Vec<String>,
+    hotel_regions_norm: Vec<[String; 4]>,
 }
 
 impl SessionStore {
@@ -127,7 +183,24 @@ impl SessionStore {
     pub fn save(&self, session: &StoredSession) -> Result<SessionMetadata, AppError> {
         let _write_guard = self.lock_writes()?;
         let mut connection = self.connection()?;
+        connection
+            .pragma_update(None, "cache_size", -BULK_SAVE_CACHE_KIB)
+            .map_err(sql_error)?;
         let transaction = connection.transaction().map_err(sql_error)?;
+        #[cfg(test)]
+        let save_timing_enabled = std::env::var_os("MAIYIN_SAVE_TIMINGS").is_some();
+        #[cfg(test)]
+        let save_started = Instant::now();
+        #[cfg(test)]
+        let save_mark = |label: &str| {
+            if save_timing_enabled {
+                eprintln!(
+                    "save_stage={} elapsed_ms={}",
+                    label,
+                    save_started.elapsed().as_millis()
+                );
+            }
+        };
         let stale_combined_session_ids = {
             let mut statement = transaction
                 .prepare("SELECT session_id FROM sessions WHERE listed = 0 AND session_id <> ?1")
@@ -181,119 +254,94 @@ impl SessionStore {
                 ],
             )
             .map_err(sql_error)?;
+        #[cfg(test)]
+        save_mark("session_row");
 
         {
             let mut record_filter_counts = HashMap::<(String, String), i64>::new();
-            let mut record_statement = transaction
-                .prepare(
-                    "INSERT INTO records(session_id, uid, person_key, check_in, record_json, \
-                     name_norm, id_no_norm, phone_norm, hotel_name_norm, hotel_province_norm, \
-                     hotel_city_norm, hotel_county_norm, household_region_norm, \
-                     household_province_norm, household_city_norm, household_county_norm, \
-                     age, gender, search_text) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-                     ?16, ?17, ?18, ?19)",
+            std::thread::scope(|scope| -> Result<(), AppError> {
+                let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                let records = &session.records;
+                let producer = scope.spawn(move || {
+                    for chunk in records.chunks(SAVE_PREPARE_CHUNK_SIZE) {
+                        let prepared = prepare_record_chunk(chunk);
+                        let stop = prepared.is_err();
+                        if sender.send(prepared).is_err() || stop {
+                            break;
+                        }
+                    }
+                });
+                let consumer_result = (|| -> Result<(), AppError> {
+                    for prepared_records in receiver {
+                        let prepared_records = prepared_records?;
+                        for prepared in &prepared_records {
+                            let record = prepared.record;
+                            if record.check_in.is_some() {
+                                increment_record_filter_count(
+                                    &mut record_filter_counts,
+                                    "hotel_name",
+                                    &prepared.hotel_name_norm,
+                                );
+                                increment_record_filter_count(
+                                    &mut record_filter_counts,
+                                    "hotel_province",
+                                    &prepared.hotel_province_norm,
+                                );
+                                increment_record_filter_count(
+                                    &mut record_filter_counts,
+                                    "hotel_city",
+                                    &prepared.hotel_city_norm,
+                                );
+                                increment_record_filter_count(
+                                    &mut record_filter_counts,
+                                    "hotel_county",
+                                    &prepared.hotel_county_norm,
+                                );
+                                increment_record_filter_count(
+                                    &mut record_filter_counts,
+                                    "household_province",
+                                    &prepared.household_province_norm,
+                                );
+                                increment_record_filter_count(
+                                    &mut record_filter_counts,
+                                    "household_city",
+                                    &prepared.household_city_norm,
+                                );
+                                increment_record_filter_count(
+                                    &mut record_filter_counts,
+                                    "household_county",
+                                    &prepared.household_county_norm,
+                                );
+                            }
+                        }
+                        insert_record_batches(
+                            &transaction,
+                            &session.session_id,
+                            &prepared_records,
+                        )?;
+                    }
+                    Ok(())
+                })();
+                producer
+                    .join()
+                    .map_err(|_| AppError::Storage("record preparation worker panicked".into()))?;
+                consumer_result
+            })?;
+            #[cfg(test)]
+            save_mark("records_base");
+            // Mirror all rows into the contentless FTS5 trigram table in one SQLite statement.
+            // The SELECT uses the source table's real rowid, not the session-local business
+            // uid, and avoids one Rust/SQLite round-trip per imported record.
+            transaction
+                .execute(
+                    "INSERT INTO records_search_fts_v2(rowid, search_text) \
+                     SELECT rowid, search_text FROM records \
+                     WHERE session_id = ?1",
+                    [&session.session_id],
                 )
                 .map_err(sql_error)?;
-            let mut record_search_fts_statement = transaction
-                .prepare(
-                    "INSERT INTO records_search_fts(rowid, search_text, session_id, uid) \
-                     VALUES (?1, ?2, ?3, ?4)",
-                )
-                .map_err(sql_error)?;
-            for record in &session.records {
-                let search_text = normalize(
-                    &[
-                        record.name.as_str(),
-                        record.id_no.as_str(),
-                        record.phone.as_str(),
-                        record.hotel_name.as_str(),
-                        record.region.as_str(),
-                        record.household_region.as_str(),
-                        record.gender.as_str(),
-                        &record
-                            .age
-                            .map(|value| value.to_string())
-                            .unwrap_or_default(),
-                    ]
-                    .join(" "),
-                );
-                let hotel_name_norm = normalize(&record.hotel_name);
-                if record.check_in.is_some() {
-                    increment_record_filter_count(
-                        &mut record_filter_counts,
-                        "hotel_name",
-                        &hotel_name_norm,
-                    );
-                    increment_record_filter_count(
-                        &mut record_filter_counts,
-                        "hotel_province",
-                        &normalize(&record.province),
-                    );
-                    increment_record_filter_count(
-                        &mut record_filter_counts,
-                        "hotel_city",
-                        &normalize(&record.city),
-                    );
-                    increment_record_filter_count(
-                        &mut record_filter_counts,
-                        "hotel_county",
-                        &normalize(&record.county),
-                    );
-                    increment_record_filter_count(
-                        &mut record_filter_counts,
-                        "household_province",
-                        &normalize(&record.household_province),
-                    );
-                    increment_record_filter_count(
-                        &mut record_filter_counts,
-                        "household_city",
-                        &normalize(&record.household_city),
-                    );
-                    increment_record_filter_count(
-                        &mut record_filter_counts,
-                        "household_county",
-                        &normalize(&record.household_county),
-                    );
-                }
-                record_statement
-                    .execute(params![
-                        session.session_id,
-                        i64_from_u64(record.uid),
-                        record.person_key,
-                        record
-                            .check_in
-                            .map(|value| value.format("%Y-%m-%d %H:%M:%S").to_string()),
-                        json(record)?,
-                        normalize(&record.name),
-                        normalize(&record.id_no),
-                        normalize(&record.phone),
-                        hotel_name_norm.clone(),
-                        normalize(&record.province),
-                        normalize(&record.city),
-                        normalize(&record.county),
-                        normalize(&record.household_region),
-                        normalize(&record.household_province),
-                        normalize(&record.household_city),
-                        normalize(&record.household_county),
-                        record.age.map(i64::from),
-                        record.gender,
-                        search_text.clone(),
-                    ])
-                    .map_err(sql_error)?;
-                // Mirror the row into the contentless FTS5 trigram table using the real
-                // SQLite rowid. Business uid is only unique within a session and does not
-                // necessarily match the table rowid.
-                let record_rowid = transaction.last_insert_rowid();
-                record_search_fts_statement
-                    .execute(params![
-                        record_rowid,
-                        search_text,
-                        session.session_id,
-                        i64_from_u64(record.uid),
-                    ])
-                    .map_err(sql_error)?;
-            }
+            #[cfg(test)]
+            save_mark("records_fts");
             let mut count_statement = transaction
                 .prepare(
                     "INSERT INTO record_filter_counts(
@@ -311,135 +359,60 @@ impl SessionStore {
                     ])
                     .map_err(sql_error)?;
             }
+            #[cfg(test)]
+            save_mark("records_and_fts");
         }
 
         {
-            let mut person_statement = transaction
-                .prepare(
-                    "INSERT INTO people(
-                        session_id, person_key, name, name_norm, id_no_norm, phone_norm,
-                        household_region_norm, household_province_norm, household_city_norm,
-                        household_county_norm, age, gender, level, alert_count,
-                        total_records, score, search_text, summary_json
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            std::thread::scope(|scope| -> Result<(), AppError> {
+                let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                let analyses = &session.analyses;
+                let producer = scope.spawn(move || {
+                    for chunk in analyses.chunks(SAVE_PREPARE_CHUNK_SIZE) {
+                        let prepared = prepare_person_chunk(chunk);
+                        let stop = prepared.is_err();
+                        if sender.send(prepared).is_err() || stop {
+                            break;
+                        }
+                    }
+                });
+                let consumer_result = (|| -> Result<(), AppError> {
+                    for prepared_people in receiver {
+                        let prepared_people = prepared_people?;
+                        insert_person_batches(&transaction, &session.session_id, &prepared_people)?;
+                        insert_alert_batches(&transaction, &session.session_id, &prepared_people)?;
+                        insert_person_hotel_batches(
+                            &transaction,
+                            &session.session_id,
+                            &prepared_people,
+                        )?;
+                        insert_person_hotel_region_batches(
+                            &transaction,
+                            &session.session_id,
+                            &prepared_people,
+                        )?;
+                    }
+                    Ok(())
+                })();
+                producer
+                    .join()
+                    .map_err(|_| AppError::Storage("people preparation worker panicked".into()))?;
+                consumer_result
+            })?;
+            #[cfg(test)]
+            save_mark("people_base");
+            // Populate people FTS in one statement as well. `people.rowid` is the only valid
+            // FTS rowid; person_key is session-local and cannot safely stand in for it.
+            transaction
+                .execute(
+                    "INSERT INTO people_search_fts_v2(rowid, search_text) \
+                     SELECT rowid, search_text FROM people \
+                     WHERE session_id = ?1",
+                    [&session.session_id],
                 )
                 .map_err(sql_error)?;
-            let mut alert_statement = transaction
-                .prepare(
-                    "INSERT INTO alerts(session_id, person_key, alert_index, alert_json) \
-                     VALUES (?1, ?2, ?3, ?4)",
-                )
-                .map_err(sql_error)?;
-            let mut hotel_statement = transaction
-                .prepare(
-                    "INSERT OR IGNORE INTO person_hotels(session_id, person_key, hotel_name_norm) \
-                     VALUES (?1, ?2, ?3)",
-                )
-                .map_err(sql_error)?;
-            let mut region_statement = transaction
-                .prepare(
-                    "INSERT OR IGNORE INTO person_hotel_regions(
-                        session_id, person_key, province_norm, city_norm, county_norm, region_norm
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                )
-                .map_err(sql_error)?;
-            let mut person_search_fts_statement = transaction
-                .prepare(
-                    "INSERT INTO people_search_fts(rowid, search_text, session_id, person_key) \
-                     VALUES (?1, ?2, ?3, ?4)",
-                )
-                .map_err(sql_error)?;
-
-            for analysis in &session.analyses {
-                let summary = &analysis.summary;
-                let search_text = normalize(
-                    &[
-                        summary.name.as_str(),
-                        summary.id_no.as_str(),
-                        summary.phone.as_str(),
-                        summary.household_region.as_str(),
-                        summary.gender.as_str(),
-                        summary.level.as_str(),
-                        &summary
-                            .age
-                            .map(|value| value.to_string())
-                            .unwrap_or_default(),
-                        &summary.alert_titles.join(" "),
-                    ]
-                    .join(" "),
-                );
-                person_statement
-                    .execute(params![
-                        session.session_id,
-                        summary.person_key,
-                        summary.name,
-                        normalize(&summary.name),
-                        normalize(&summary.id_no),
-                        normalize(&summary.phone),
-                        normalize(&summary.household_region),
-                        normalize(&summary.household_province),
-                        normalize(&summary.household_city),
-                        normalize(&summary.household_county),
-                        summary.age.map(i64::from),
-                        summary.gender,
-                        summary.level,
-                        i64_from_usize(summary.alert_count),
-                        i64_from_usize(summary.total_records),
-                        i64::from(summary.score),
-                        search_text,
-                        json(summary)?,
-                    ])
-                    .map_err(sql_error)?;
-                // Capture the implicit rowid SQLite assigned to this people row, then mirror it
-                // into the corresponding FTS5 virtual table.
-                let person_pk_rowid: i64 = transaction
-                    .query_row(
-                        "SELECT rowid FROM people WHERE session_id = ?1 AND person_key = ?2",
-                        params![session.session_id, summary.person_key],
-                        |row| row.get(0),
-                    )
-                    .map_err(sql_error)?;
-                person_search_fts_statement
-                    .execute(params![
-                        person_pk_rowid,
-                        search_text,
-                        session.session_id,
-                        summary.person_key,
-                    ])
-                    .map_err(sql_error)?;
-
-                for (index, alert) in analysis.alerts.iter().enumerate() {
-                    alert_statement
-                        .execute(params![
-                            session.session_id,
-                            summary.person_key,
-                            i64_from_usize(index),
-                            json(alert)?,
-                        ])
-                        .map_err(sql_error)?;
-                }
-                for hotel_name in &summary.hotel_names {
-                    hotel_statement
-                        .execute(params![
-                            session.session_id,
-                            summary.person_key,
-                            normalize(hotel_name),
-                        ])
-                        .map_err(sql_error)?;
-                }
-                for region in &summary.hotel_regions {
-                    region_statement
-                        .execute(params![
-                            session.session_id,
-                            summary.person_key,
-                            normalize(&region.province),
-                            normalize(&region.city),
-                            normalize(&region.county),
-                            normalize(&region.region),
-                        ])
-                        .map_err(sql_error)?;
-                }
-            }
+            #[cfg(test)]
+            save_mark("people_fts");
         }
 
         if !session.is_combined {
@@ -452,6 +425,8 @@ impl SessionStore {
                 .map_err(sql_error)?;
         }
         transaction.commit().map_err(sql_error)?;
+        #[cfg(test)]
+        save_mark("commit");
         metadata_from(&connection, &session.session_id)
     }
 
@@ -550,8 +525,8 @@ impl SessionStore {
             .map_err(sql_error)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(sql_error)? {
-            let payload: String = row.get(0).map_err(sql_error)?;
-            items.push(from_json(&payload)?);
+            let payload: Value = row.get(0).map_err(sql_error)?;
+            items.push(from_stored_json(payload)?);
         }
         Ok(PersonPage {
             items,
@@ -603,9 +578,11 @@ impl SessionStore {
             .map_err(sql_error)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(sql_error)? {
-            let payload: String = row.get(0).map_err(sql_error)?;
-            items.push(crate::model::ImportedStayRecord::from(from_json::<Record>(
-                &payload,
+            let payload: Value = row.get(0).map_err(sql_error)?;
+            items.push(crate::model::ImportedStayRecord::from(from_stored_json::<
+                Record,
+            >(
+                payload
             )?));
         }
         Ok(ImportedRecordsPage {
@@ -623,7 +600,7 @@ impl SessionStore {
     ) -> Result<PersonDetail, AppError> {
         let _read_guard = self.lock_reads()?;
         let connection = self.connection()?;
-        let summary_payload: Option<String> = connection
+        let summary_payload: Option<Value> = connection
             .query_row(
                 "SELECT summary_json FROM people WHERE session_id = ?1 AND person_key = ?2",
                 params![session_id, person_key],
@@ -632,7 +609,7 @@ impl SessionStore {
             .optional()
             .map_err(sql_error)?;
         let person = summary_payload
-            .map(|payload| from_json(&payload))
+            .map(from_stored_json)
             .transpose()?
             .ok_or_else(|| AppError::Validation("未找到指定人员".into()))?;
 
@@ -888,10 +865,22 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
         .map_err(sql_error)?;
     if version == 1 || version == 2 || version == 3 {
         reset_legacy_database(connection)?;
-    } else if version != 0 && version != DATABASE_VERSION {
+    } else if version != 0 && version != 4 && version != DATABASE_VERSION {
         return Err(AppError::Storage(format!(
             "不支持的历史数据库版本 {version}，当前版本为 {DATABASE_VERSION}"
         )));
+    }
+    if version == 0 {
+        #[cfg(test)]
+        let page_size = std::env::var("MAIYIN_BENCH_PAGE_SIZE")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(DATABASE_PAGE_SIZE);
+        #[cfg(not(test))]
+        let page_size = DATABASE_PAGE_SIZE;
+        connection
+            .pragma_update(None, "page_size", page_size)
+            .map_err(sql_error)?;
     }
     connection
         .execute_batch(&format!(
@@ -922,7 +911,7 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
                 uid INTEGER NOT NULL,
                 person_key TEXT NOT NULL,
                 check_in TEXT,
-                record_json TEXT NOT NULL,
+                record_json BLOB NOT NULL,
                 name_norm TEXT NOT NULL DEFAULT '',
                 id_no_norm TEXT NOT NULL DEFAULT '',
                 phone_norm TEXT NOT NULL DEFAULT '',
@@ -957,7 +946,7 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
                 total_records INTEGER NOT NULL,
                 score INTEGER NOT NULL,
                 search_text TEXT NOT NULL,
-                summary_json TEXT NOT NULL,
+                summary_json BLOB NOT NULL,
                 PRIMARY KEY(session_id, person_key)
              );
              CREATE TABLE IF NOT EXISTS alerts(
@@ -993,6 +982,15 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
                 PRIMARY KEY(session_id, filter_kind, value_norm),
                 FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
              );
+             -- These explicit indexes duplicate the composite PRIMARY KEY indexes exactly
+             -- (or use only their left-most prefix). Keeping them doubles/triples B-tree
+             -- maintenance for the hottest people child-table inserts without improving
+             -- the supported lookup plans. Drop them during the lossless v4 -> v5 upgrade
+             -- as well as when opening an early v5 database created by a development build.
+             DROP INDEX IF EXISTS idx_person_hotels_lookup;
+             DROP INDEX IF EXISTS idx_person_hotel_regions_jurisdiction;
+             DROP INDEX IF EXISTS idx_person_regions_lookup;
+             DROP INDEX IF EXISTS idx_record_filter_counts_lookup;
              CREATE INDEX IF NOT EXISTS idx_sessions_imported_at ON sessions(listed, imported_at DESC);
              CREATE INDEX IF NOT EXISTS idx_records_person ON records(session_id, person_key);
              CREATE INDEX IF NOT EXISTS idx_records_check_in ON records(session_id, check_in, uid);
@@ -1004,10 +1002,6 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
              CREATE INDEX IF NOT EXISTS idx_people_level_alert ON people(session_id, level, alert_count);
              CREATE INDEX IF NOT EXISTS idx_people_age_gender ON people(session_id, age, gender);
              CREATE INDEX IF NOT EXISTS idx_people_household_split ON people(session_id, household_province_norm, household_city_norm, household_county_norm);
-             CREATE INDEX IF NOT EXISTS idx_person_hotels_lookup ON person_hotels(session_id, person_key, hotel_name_norm);
-             CREATE INDEX IF NOT EXISTS idx_person_hotel_regions_jurisdiction ON person_hotel_regions(session_id, person_key, province_norm, city_norm, county_norm);
-             CREATE INDEX IF NOT EXISTS idx_person_regions_lookup ON person_hotel_regions(session_id, person_key);
-             CREATE INDEX IF NOT EXISTS idx_record_filter_counts_lookup ON record_filter_counts(session_id, filter_kind, value_norm);
              CREATE VIRTUAL TABLE IF NOT EXISTS records_search_fts USING fts5(
                 search_text, session_id UNINDEXED, uid UNINDEXED,
                 content='', contentless_delete=1, tokenize='trigram'
@@ -1015,6 +1009,14 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
              CREATE VIRTUAL TABLE IF NOT EXISTS people_search_fts USING fts5(
                 search_text, session_id UNINDEXED, person_key UNINDEXED,
                 content='', contentless_delete=1, tokenize='trigram'
+             );
+             CREATE VIRTUAL TABLE IF NOT EXISTS records_search_fts_v2 USING fts5(
+                search_text, content='records', content_rowid='rowid', tokenize='trigram',
+                detail=none, columnsize=0
+             );
+             CREATE VIRTUAL TABLE IF NOT EXISTS people_search_fts_v2 USING fts5(
+                search_text, content='people', content_rowid='rowid', tokenize='trigram',
+                detail=none, columnsize=0
              );
              PRAGMA user_version = {DATABASE_VERSION};"
         ))
@@ -1025,6 +1027,8 @@ fn reset_legacy_database(connection: &Connection) -> Result<(), AppError> {
     connection
         .execute_batch(
             "PRAGMA foreign_keys = OFF;
+             DROP TABLE IF EXISTS people_search_fts_v2;
+             DROP TABLE IF EXISTS records_search_fts_v2;
              DROP TABLE IF EXISTS people_search_fts;
              DROP TABLE IF EXISTS records_search_fts;
              DROP TABLE IF EXISTS person_hotel_regions;
@@ -1140,9 +1144,17 @@ fn build_person_filter(session_id: &str, query: &PersonQuery) -> (String, Vec<Va
             // the FTS5 doclist (a small candidate set) and joins to people on rowid —
             // the EXISTS form forced a people scan with a per-row MATCH eval.
             clauses.push(
-                "p.rowid IN (SELECT rowid FROM people_search_fts WHERE search_text MATCH ?)".into(),
+                "p.rowid IN (
+                    SELECT rowid FROM people_search_fts WHERE people_search_fts MATCH ?
+                    UNION
+                    SELECT rowid FROM people_search_fts_v2 WHERE people_search_fts_v2 MATCH ?
+                 ) \
+                 AND p.search_text LIKE ? ESCAPE '\\'"
+                    .into(),
             );
-            values.push(Value::Text(fts_match_query(&search)));
+            values.push(Value::Text(fts_trigram_query(&search)));
+            values.push(Value::Text(fts_trigram_query(&search)));
+            values.push(Value::Text(contains_pattern(&search)));
         } else {
             // Fallback for ≤2-char queries: trigram tokenizer floor; LIKE contains stays correct.
             clauses.push("p.search_text LIKE ? ESCAPE '\\'".into());
@@ -1201,7 +1213,7 @@ fn build_person_filter(session_id: &str, query: &PersonQuery) -> (String, Vec<Va
                 continue;
             }
             // Prefix match on B-tree-indexable split column; sargable via
-            // idx_person_hotel_regions_jurisdiction.
+            // the person_hotel_regions composite PRIMARY KEY index.
             region_clauses.push(format!("phr.{column} >= ? AND phr.{column} < ?"));
             let (lower, upper) = prefix_range(&value);
             values.push(Value::Text(lower));
@@ -1294,9 +1306,17 @@ fn build_records_filter(
             // FTS5 trigram MATCH: indexed substring for ≥3 chars. rowid-in-subselect
             // drives the FTS5 doclist; ON-clause on rowid drives a seek into records.
             clauses.push(
-                "rowid IN (SELECT rowid FROM records_search_fts WHERE search_text MATCH ?)".into(),
+                "rowid IN (
+                    SELECT rowid FROM records_search_fts WHERE records_search_fts MATCH ?
+                    UNION
+                    SELECT rowid FROM records_search_fts_v2 WHERE records_search_fts_v2 MATCH ?
+                 ) \
+                 AND search_text LIKE ? ESCAPE '\\'"
+                    .into(),
             );
-            values.push(Value::Text(fts_match_query(&search)));
+            values.push(Value::Text(fts_trigram_query(&search)));
+            values.push(Value::Text(fts_trigram_query(&search)));
+            values.push(Value::Text(contains_pattern(&search)));
         } else {
             clauses.push("search_text LIKE ? ESCAPE '\\'".into());
             values.push(Value::Text(contains_pattern(&search)));
@@ -1510,8 +1530,8 @@ fn load_records_for_person(
         .map_err(sql_error)?;
     let mut result = Vec::new();
     while let Some(row) = rows.next().map_err(sql_error)? {
-        let payload: String = row.get(0).map_err(sql_error)?;
-        result.push(from_json(&payload)?);
+        let payload: Value = row.get(0).map_err(sql_error)?;
+        result.push(from_stored_json(payload)?);
     }
     Ok(result)
 }
@@ -1525,10 +1545,392 @@ fn load_json_column<T: serde::de::DeserializeOwned>(
     let mut rows = statement.query([session_id]).map_err(sql_error)?;
     let mut result = Vec::new();
     while let Some(row) = rows.next().map_err(sql_error)? {
-        let payload: String = row.get(0).map_err(sql_error)?;
-        result.push(from_json(&payload)?);
+        let payload: Value = row.get(0).map_err(sql_error)?;
+        result.push(from_stored_json(payload)?);
     }
     Ok(result)
+}
+
+fn prepare_record_chunk(records: &[Record]) -> Result<Vec<PreparedRecord<'_>>, AppError> {
+    records
+        .par_iter()
+        .map(|record| {
+            let age = record
+                .age
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            let search_text = normalize(
+                &[
+                    record.name.as_str(),
+                    record.id_no.as_str(),
+                    record.phone.as_str(),
+                    record.hotel_name.as_str(),
+                    record.region.as_str(),
+                    record.household_region.as_str(),
+                    record.gender.as_str(),
+                    age.as_str(),
+                ]
+                .join(" "),
+            );
+            Ok(PreparedRecord {
+                record,
+                uid: i64_from_u64(record.uid),
+                check_in: record
+                    .check_in
+                    .map(|value| value.format("%Y-%m-%d %H:%M:%S").to_string()),
+                record_json: compressed_json(record)?,
+                name_norm: normalize(&record.name),
+                id_no_norm: normalize(&record.id_no),
+                phone_norm: normalize(&record.phone),
+                hotel_name_norm: normalize(&record.hotel_name),
+                hotel_province_norm: normalize(&record.province),
+                hotel_city_norm: normalize(&record.city),
+                hotel_county_norm: normalize(&record.county),
+                household_region_norm: normalize(&record.household_region),
+                household_province_norm: normalize(&record.household_province),
+                household_city_norm: normalize(&record.household_city),
+                household_county_norm: normalize(&record.household_county),
+                age: record.age.map(i64::from),
+                search_text,
+            })
+        })
+        .collect::<Vec<Result<_, AppError>>>()
+        .into_iter()
+        .collect()
+}
+
+fn prepare_person_chunk(analyses: &[PersonAnalysis]) -> Result<Vec<PreparedPerson<'_>>, AppError> {
+    analyses
+        .par_iter()
+        .map(|analysis| {
+            let summary = &analysis.summary;
+            let age = summary
+                .age
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            let alert_titles = summary.alert_titles.join(" ");
+            let search_text = normalize(
+                &[
+                    summary.name.as_str(),
+                    summary.id_no.as_str(),
+                    summary.phone.as_str(),
+                    summary.household_region.as_str(),
+                    summary.gender.as_str(),
+                    summary.level.as_str(),
+                    age.as_str(),
+                    alert_titles.as_str(),
+                ]
+                .join(" "),
+            );
+            Ok(PreparedPerson {
+                analysis,
+                summary_json: compressed_json(summary)?,
+                name_norm: normalize(&summary.name),
+                id_no_norm: normalize(&summary.id_no),
+                phone_norm: normalize(&summary.phone),
+                household_region_norm: normalize(&summary.household_region),
+                household_province_norm: normalize(&summary.household_province),
+                household_city_norm: normalize(&summary.household_city),
+                household_county_norm: normalize(&summary.household_county),
+                age: summary.age.map(i64::from),
+                alert_count: i64_from_usize(summary.alert_count),
+                total_records: i64_from_usize(summary.total_records),
+                score: i64::from(summary.score),
+                search_text,
+                alert_json: analysis
+                    .alerts
+                    .iter()
+                    .map(json)
+                    .collect::<Result<Vec<_>, _>>()?,
+                hotel_names_norm: summary
+                    .hotel_names
+                    .iter()
+                    .map(|value| normalize(value))
+                    .collect(),
+                hotel_regions_norm: summary
+                    .hotel_regions
+                    .iter()
+                    .map(|region| {
+                        [
+                            normalize(&region.province),
+                            normalize(&region.city),
+                            normalize(&region.county),
+                            normalize(&region.region),
+                        ]
+                    })
+                    .collect(),
+            })
+        })
+        .collect::<Vec<Result<_, AppError>>>()
+        .into_iter()
+        .collect()
+}
+
+fn insert_record_batches(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    records: &[PreparedRecord<'_>],
+) -> Result<(), AppError> {
+    const COLUMN_COUNT: usize = 19;
+    let max_rows = BULK_INSERT_VARIABLE_LIMIT / COLUMN_COUNT;
+    for rows in records.chunks(max_rows) {
+        let sql = multi_row_insert_sql(
+            "INSERT INTO records(\
+             session_id, uid, person_key, check_in, record_json, name_norm, id_no_norm, \
+             phone_norm, hotel_name_norm, hotel_province_norm, hotel_city_norm, \
+             hotel_county_norm, household_region_norm, household_province_norm, \
+             household_city_norm, household_county_norm, age, gender, search_text) VALUES ",
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows.len(),
+        );
+        let mut values = Vec::<&dyn ToSql>::with_capacity(rows.len() * COLUMN_COUNT);
+        for prepared in rows {
+            values.push(&session_id);
+            values.push(&prepared.uid);
+            values.push(&prepared.record.person_key);
+            values.push(&prepared.check_in);
+            values.push(&prepared.record_json);
+            values.push(&prepared.name_norm);
+            values.push(&prepared.id_no_norm);
+            values.push(&prepared.phone_norm);
+            values.push(&prepared.hotel_name_norm);
+            values.push(&prepared.hotel_province_norm);
+            values.push(&prepared.hotel_city_norm);
+            values.push(&prepared.hotel_county_norm);
+            values.push(&prepared.household_region_norm);
+            values.push(&prepared.household_province_norm);
+            values.push(&prepared.household_city_norm);
+            values.push(&prepared.household_county_norm);
+            values.push(&prepared.age);
+            values.push(&prepared.record.gender);
+            values.push(&prepared.search_text);
+        }
+        transaction
+            .prepare_cached(&sql)
+            .map_err(sql_error)?
+            .execute(params_from_iter(values))
+            .map_err(sql_error)?;
+    }
+    Ok(())
+}
+
+fn insert_person_batches(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    people: &[PreparedPerson<'_>],
+) -> Result<(), AppError> {
+    const COLUMN_COUNT: usize = 18;
+    let max_rows = BULK_INSERT_VARIABLE_LIMIT / COLUMN_COUNT;
+    for rows in people.chunks(max_rows) {
+        let sql = multi_row_insert_sql(
+            "INSERT INTO people(\
+             session_id, person_key, name, name_norm, id_no_norm, phone_norm, \
+             household_region_norm, household_province_norm, household_city_norm, \
+             household_county_norm, age, gender, level, alert_count, total_records, score, \
+             search_text, summary_json) VALUES ",
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows.len(),
+        );
+        let mut values = Vec::<&dyn ToSql>::with_capacity(rows.len() * COLUMN_COUNT);
+        for prepared in rows {
+            let summary = &prepared.analysis.summary;
+            values.push(&session_id);
+            values.push(&summary.person_key);
+            values.push(&summary.name);
+            values.push(&prepared.name_norm);
+            values.push(&prepared.id_no_norm);
+            values.push(&prepared.phone_norm);
+            values.push(&prepared.household_region_norm);
+            values.push(&prepared.household_province_norm);
+            values.push(&prepared.household_city_norm);
+            values.push(&prepared.household_county_norm);
+            values.push(&prepared.age);
+            values.push(&summary.gender);
+            values.push(&summary.level);
+            values.push(&prepared.alert_count);
+            values.push(&prepared.total_records);
+            values.push(&prepared.score);
+            values.push(&prepared.search_text);
+            values.push(&prepared.summary_json);
+        }
+        transaction
+            .prepare_cached(&sql)
+            .map_err(sql_error)?
+            .execute(params_from_iter(values))
+            .map_err(sql_error)?;
+    }
+    Ok(())
+}
+
+fn insert_alert_batches(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    people: &[PreparedPerson<'_>],
+) -> Result<(), AppError> {
+    const COLUMN_COUNT: usize = 4;
+    let max_rows = BULK_INSERT_VARIABLE_LIMIT / COLUMN_COUNT;
+    let mut rows = Vec::with_capacity(max_rows);
+    for prepared in people {
+        let person_key = prepared.analysis.summary.person_key.as_str();
+        for (index, alert_json) in prepared.alert_json.iter().enumerate() {
+            rows.push((person_key, i64_from_usize(index), alert_json.as_str()));
+            if rows.len() == max_rows {
+                execute_alert_batch(transaction, session_id, &rows)?;
+                rows.clear();
+            }
+        }
+    }
+    if !rows.is_empty() {
+        execute_alert_batch(transaction, session_id, &rows)?;
+    }
+    Ok(())
+}
+
+fn execute_alert_batch(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    rows: &[(&str, i64, &str)],
+) -> Result<(), AppError> {
+    let sql = multi_row_insert_sql(
+        "INSERT INTO alerts(session_id, person_key, alert_index, alert_json) VALUES ",
+        "(?, ?, ?, ?)",
+        rows.len(),
+    );
+    let mut values = Vec::<&dyn ToSql>::with_capacity(rows.len() * 4);
+    for row in rows {
+        values.push(&session_id);
+        values.push(&row.0);
+        values.push(&row.1);
+        values.push(&row.2);
+    }
+    transaction
+        .prepare_cached(&sql)
+        .map_err(sql_error)?
+        .execute(params_from_iter(values))
+        .map_err(sql_error)?;
+    Ok(())
+}
+
+fn insert_person_hotel_batches(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    people: &[PreparedPerson<'_>],
+) -> Result<(), AppError> {
+    const COLUMN_COUNT: usize = 3;
+    let max_rows = BULK_INSERT_VARIABLE_LIMIT / COLUMN_COUNT;
+    let mut rows = Vec::with_capacity(max_rows);
+
+    for prepared in people {
+        let person_key = prepared.analysis.summary.person_key.as_str();
+        for hotel_name in &prepared.hotel_names_norm {
+            rows.push((person_key, hotel_name.as_str()));
+            if rows.len() == max_rows {
+                execute_person_hotel_batch(transaction, session_id, &rows)?;
+                rows.clear();
+            }
+        }
+    }
+    if !rows.is_empty() {
+        execute_person_hotel_batch(transaction, session_id, &rows)?;
+    }
+    Ok(())
+}
+
+fn execute_person_hotel_batch(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    rows: &[(&str, &str)],
+) -> Result<(), AppError> {
+    let sql = multi_row_insert_sql(
+        "INSERT OR IGNORE INTO person_hotels(\
+         session_id, person_key, hotel_name_norm) VALUES ",
+        "(?, ?, ?)",
+        rows.len(),
+    );
+    let mut values = Vec::<&dyn ToSql>::with_capacity(rows.len() * 3);
+    for (person_key, hotel_name) in rows {
+        values.push(&session_id);
+        values.push(person_key);
+        values.push(hotel_name);
+    }
+    transaction
+        .prepare_cached(&sql)
+        .map_err(sql_error)?
+        .execute(params_from_iter(values))
+        .map_err(sql_error)?;
+    Ok(())
+}
+
+fn insert_person_hotel_region_batches(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    people: &[PreparedPerson<'_>],
+) -> Result<(), AppError> {
+    const COLUMN_COUNT: usize = 6;
+    let max_rows = BULK_INSERT_VARIABLE_LIMIT / COLUMN_COUNT;
+    let mut rows = Vec::with_capacity(max_rows);
+
+    for prepared in people {
+        let person_key = prepared.analysis.summary.person_key.as_str();
+        for region in &prepared.hotel_regions_norm {
+            rows.push((
+                person_key,
+                region[0].as_str(),
+                region[1].as_str(),
+                region[2].as_str(),
+                region[3].as_str(),
+            ));
+            if rows.len() == max_rows {
+                execute_person_hotel_region_batch(transaction, session_id, &rows)?;
+                rows.clear();
+            }
+        }
+    }
+    if !rows.is_empty() {
+        execute_person_hotel_region_batch(transaction, session_id, &rows)?;
+    }
+    Ok(())
+}
+
+fn execute_person_hotel_region_batch(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    rows: &[(&str, &str, &str, &str, &str)],
+) -> Result<(), AppError> {
+    let sql = multi_row_insert_sql(
+        "INSERT OR IGNORE INTO person_hotel_regions(\
+         session_id, person_key, province_norm, city_norm, county_norm, region_norm) VALUES ",
+        "(?, ?, ?, ?, ?, ?)",
+        rows.len(),
+    );
+    let mut values = Vec::<&dyn ToSql>::with_capacity(rows.len() * 6);
+    for (person_key, province, city, county, region) in rows {
+        values.push(&session_id);
+        values.push(person_key);
+        values.push(province);
+        values.push(city);
+        values.push(county);
+        values.push(region);
+    }
+    transaction
+        .prepare_cached(&sql)
+        .map_err(sql_error)?
+        .execute(params_from_iter(values))
+        .map_err(sql_error)?;
+    Ok(())
+}
+
+fn multi_row_insert_sql(prefix: &str, value_group: &str, row_count: usize) -> String {
+    debug_assert!(row_count > 0);
+    let mut sql = String::with_capacity(prefix.len() + row_count * (value_group.len() + 2));
+    sql.push_str(prefix);
+    for index in 0..row_count {
+        if index > 0 {
+            sql.push_str(", ");
+        }
+        sql.push_str(value_group);
+    }
+    sql
 }
 
 fn split_hotel_terms(value: &str) -> Vec<String> {
@@ -1540,12 +1942,9 @@ fn split_hotel_terms(value: &str) -> Vec<String> {
 }
 
 fn normalize(value: &str) -> String {
-    value
-        .trim()
-        .to_lowercase()
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect()
+    let mut normalized = value.trim().to_lowercase();
+    normalized.retain(|character| !character.is_whitespace());
+    normalized
 }
 
 fn contains_pattern(value: &str) -> String {
@@ -1571,11 +1970,19 @@ fn fuzzy_pattern(value: &str) -> String {
     pattern
 }
 
-fn fts_match_query(value: &str) -> String {
-    // FTS5 trigram MATCH parses unquoted input as boolean (AND/OR/NOT). Wrap user
-    // input in double quotes so the entire string is treated as a phrase. Trigram
-    // phrase semantics == substring contains for patterns ≥3 chars.
-    format!("\"{}\"", value.replace('"', "\"\""))
+fn fts_trigram_query(value: &str) -> String {
+    // Compact detail=none FTS tables accept only three-character tokens. Use every
+    // overlapping trigram as an AND candidate set; the source-table LIKE predicate
+    // then confirms ordering and exact substring semantics.
+    let characters = value.chars().collect::<Vec<_>>();
+    characters
+        .windows(3)
+        .map(|window| {
+            let token = window.iter().collect::<String>().replace('"', "\"\"");
+            format!("\"{token}\"")
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ")
 }
 
 fn escape_like(value: &str) -> String {
@@ -1583,6 +1990,55 @@ fn escape_like(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('%', "\\%")
         .replace('_', "\\_")
+}
+
+struct JsonCompressor {
+    table: CompressTable,
+    json: Vec<u8>,
+}
+
+thread_local! {
+    static JSON_COMPRESSOR: RefCell<JsonCompressor> = RefCell::new(JsonCompressor {
+        table: CompressTable::default(),
+        json: Vec::new(),
+    });
+}
+
+fn compressed_json<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, AppError> {
+    JSON_COMPRESSOR.with(|compressor| {
+        let mut compressor = compressor.borrow_mut();
+        let JsonCompressor { table, json } = &mut *compressor;
+        json.clear();
+        serde_json::to_writer(&mut *json, value).map_err(AppError::from)?;
+        let json_len = u32::try_from(json.len())
+            .map_err(|_| AppError::Storage("JSON payload exceeds the LZ4 block limit".into()))?;
+        let maximum_compressed_size = get_maximum_output_size(json.len());
+        let mut stored =
+            Vec::with_capacity(COMPRESSED_JSON_MAGIC.len() + 4 + maximum_compressed_size);
+        stored.extend_from_slice(COMPRESSED_JSON_MAGIC);
+        stored.extend_from_slice(&json_len.to_le_bytes());
+        stored.resize(COMPRESSED_JSON_MAGIC.len() + 4 + maximum_compressed_size, 0);
+        let compressed_len = compress_into_with_table(json, &mut stored[8..], table)
+            .map_err(|error| AppError::Storage(format!("JSON compression failed: {error}")))?;
+        stored.truncate(8 + compressed_len);
+        Ok(stored)
+    })
+}
+
+fn from_stored_json<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, AppError> {
+    match value {
+        Value::Text(text) => from_json(&text),
+        Value::Blob(blob) if blob.starts_with(COMPRESSED_JSON_MAGIC) => {
+            let json = decompress_size_prepended(&blob[COMPRESSED_JSON_MAGIC.len()..]).map_err(
+                |error| AppError::Storage(format!("JSON decompression failed: {error}")),
+            )?;
+            serde_json::from_slice(&json).map_err(AppError::from)
+        }
+        Value::Blob(blob) => serde_json::from_slice(&blob).map_err(AppError::from),
+        _ => Err(AppError::Storage(
+            "Stored JSON payload is neither TEXT nor BLOB".into(),
+        )),
+    }
 }
 
 fn json<T: serde::Serialize>(value: &T) -> Result<String, AppError> {
@@ -1743,7 +2199,52 @@ mod tests {
         assert_eq!(loaded.records.len(), 1);
         assert_eq!(store.list().unwrap().len(), 1);
         assert_eq!(store.query_people("session-1", &query()).unwrap().total, 1);
+        let connection = store.connection().unwrap();
+        let page_size: i64 = connection
+            .query_row("PRAGMA page_size", [], |row| row.get(0))
+            .unwrap();
+        let (record_type, record_payload): (String, Value) = connection
+            .query_row(
+                "SELECT typeof(record_json), record_json FROM records WHERE session_id = ?1",
+                ["session-1"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let (summary_type, summary_payload): (String, Value) = connection
+            .query_row(
+                "SELECT typeof(summary_json), summary_json FROM people WHERE session_id = ?1",
+                ["session-1"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(record_type, "blob");
+        assert_eq!(summary_type, "blob");
+        assert_eq!(page_size, DATABASE_PAGE_SIZE);
+        assert!(matches!(
+            record_payload,
+            Value::Blob(payload) if payload.starts_with(COMPRESSED_JSON_MAGIC)
+        ));
+        assert!(matches!(
+            summary_payload,
+            Value::Blob(payload) if payload.starts_with(COMPRESSED_JSON_MAGIC)
+        ));
+        drop(connection);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stored_json_reader_accepts_plain_blob_and_rejects_corrupt_lz4() {
+        let record = sample_record(7, Some(1));
+        let plain_blob = serde_json::to_vec(&record).unwrap();
+        let decoded: Record = from_stored_json(Value::Blob(plain_blob)).unwrap();
+        assert_eq!(decoded.uid, record.uid);
+
+        let mut corrupt = COMPRESSED_JSON_MAGIC.to_vec();
+        corrupt.extend_from_slice(&4_u32.to_le_bytes());
+        assert!(matches!(
+            from_stored_json::<Record>(Value::Blob(corrupt)),
+            Err(AppError::Storage(_))
+        ));
     }
 
     #[test]
@@ -1991,7 +2492,7 @@ mod tests {
 
     #[test]
     fn version_three_database_is_cleared_instead_of_migrated() {
-        // v3 → v4: also wiped + rebuilt (spec allows clear + re-import as the
+        // v3 to current: also wiped + rebuilt (spec allows clear + re-import as the
         // only schema-evolution path). Confirms FTS5 tables get (re)created too.
         let (root, store) = test_store();
         store.save(&sample_session()).unwrap();
@@ -2021,6 +2522,66 @@ mod tests {
             )
             .unwrap();
         assert_eq!(fts_exists, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn version_four_adds_compact_fts_without_clearing_history() {
+        let (root, store) = test_store();
+        let mut session = sample_session();
+        session.analyses[0].summary.name = "legacy person".into();
+        let mut record = sample_record(42, Some(1));
+        record.hotel_name = "legacy hotel".into();
+        session.records = vec![record];
+        session.stats.records = 1;
+        store.save(&session).unwrap();
+
+        let connection = store.connection().unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO records_search_fts(rowid, search_text, session_id, uid)
+                   SELECT rowid, search_text, session_id, uid FROM records;
+                 INSERT INTO people_search_fts(rowid, search_text, session_id, person_key)
+                   SELECT rowid, search_text, session_id, person_key FROM people;
+                 DROP TABLE records_search_fts_v2;
+                 DROP TABLE people_search_fts_v2;
+                 PRAGMA user_version = 4;",
+            )
+            .unwrap();
+        drop(connection);
+        drop(store);
+
+        let migrated = SessionStore::open(root.clone()).unwrap();
+        assert_eq!(migrated.list().unwrap().len(), 1);
+        let version: i64 = migrated
+            .connection()
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, DATABASE_VERSION);
+
+        let mut people_query = query();
+        people_query.search = "legacy".into();
+        assert_eq!(
+            migrated
+                .query_people("session-1", &people_query)
+                .unwrap()
+                .total,
+            1
+        );
+        let records = migrated
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    search: "legacy".into(),
+                    page: 1,
+                    page_size: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(records.total, 1);
+        assert_eq!(records.items[0].uid, 42);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2080,7 +2641,7 @@ mod tests {
             "expected idx_people_household_split seek, got: {plan_text}"
         );
 
-        // 3. hotel_region jurisdiction prefix via idx_person_hotel_regions_jurisdiction.
+        // 3. hotel_region jurisdiction prefix via the composite PRIMARY KEY auto-index.
         let mut q = query();
         q.hotel_province = "安徽".into();
         let (where_sql, values) = build_person_filter("session-1", &q);
@@ -2092,9 +2653,9 @@ mod tests {
         assert!(
             plan_text
                 .to_lowercase()
-                .contains("idx_person_hotel_regions_jurisdiction")
+                .contains("sqlite_autoindex_person_hotel_regions")
                 || plan_text.to_lowercase().contains("using index"),
-            "expected idx_person_hotel_regions_jurisdiction seek, got: {plan_text}"
+            "expected person_hotel_regions PRIMARY KEY seek, got: {plan_text}"
         );
 
         // 4. records household split via idx_records_household_split.
@@ -2433,12 +2994,12 @@ mod tests {
         let connection = store.connection().unwrap();
         for (table, remaining_rowid, deleted_rowid) in [
             (
-                "records_search_fts",
+                "records_search_fts_v2",
                 session_one_record_rowid,
                 session_two_record_rowid,
             ),
             (
-                "people_search_fts",
+                "people_search_fts_v2",
                 session_one_person_rowid,
                 session_two_person_rowid,
             ),
