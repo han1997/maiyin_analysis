@@ -194,8 +194,14 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 
 ### 3. Contracts
 
-- `AnalysisSettings` contains only nullable `frequencyStart`/`frequencyEnd`
-  plus thresholds for selected-window, 7-day, 30-day, and 365-day frequency.
+- `AnalysisSettings.frequencyMode` is either `rolling` or `selected`. It also contains
+  nullable `frequencyStart`/`frequencyEnd` plus thresholds for selected-window, 7-day,
+  30-day, and 365-day frequency. New settings default to `rolling`.
+- `selected` requires both time boundaries and uses only `frequencyThreshold` for
+  frequency alerts. `rolling` ignores stored time boundaries and uses only the
+  7/30/365-day thresholds; inactive fields never block validation or affect results.
+- Legacy stored settings without `frequencyMode` infer `selected` when either time
+  boundary exists, otherwise `rolling`, preserving the prior implicit behavior.
 - Hotel jurisdiction, household include/exclude, age, and gender belong to
   `PersonQuery`; changing them calls `query_people`, not `reanalyze`, and never alters scores.
 - Threshold defaults are `3`, `3`, `12`, and `144` respectively.
@@ -210,7 +216,7 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   hotel name (AND across terms).
 - Populated province/city/county filters must match one shared `hotelRegions`
   entry; never combine components from different stays.
-- Stored session payloads use schema version `3` inside SQLite database version `2`.
+- Stored session payloads use schema version `4` inside SQLite database version `2`.
   This release starts from an empty database and provides no legacy JSON upgrade path.
 - React never computes scores. Selected-window and rolling frequency scoring
   remain mutually exclusive in Rust.
@@ -222,6 +228,7 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 | Condition | Result |
 | --- | --- |
 | Any threshold outside `1..=99999` | `validation_error` naming the period |
+| `selected` without both start and end | `validation_error`; keep the settings panel open |
 | Start boundary after end boundary | `validation_error` and keep settings UI open |
 | Result-filter minimum age exceeds maximum age | Frontend toast; do not update the applied query or call Rust |
 | Missing check-in | Exclude from time-window analysis |
@@ -231,8 +238,10 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 
 ### 5. Good / Base / Bad Cases
 
-- Good: one selected boundary is set, all totals/evidence/exports use that
-  boundary, and no rolling frequency alert scores.
+- Good: `selected` with both boundaries filters all totals/evidence/exports to that
+  inclusive range and produces no rolling frequency alert scores.
+- Good: switching back to `rolling` may retain the prior date values for convenience,
+  but Rust ignores them for filtering and validation.
 - Good: `A，B` returns only people whose hotel set fuzzy-matches both terms,
   while their Rust score and alerts remain unchanged.
 - Base: no result filter is active, so SQLite counts the session and returns only the requested page.
@@ -242,11 +251,15 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   because this changes the evidence set and reintroduces slow searches.
 - Bad: matching province from one stay and county from another; all populated
   jurisdiction components must match one structured hotel-region entry.
+- Bad: deriving frequency mode from whether the date inputs are empty after the explicit
+  mode field exists; stale dates must not reactivate selected-window analysis.
 
 ### 6. Tests Required
 
 - Same-room overlap alerts at the base score; different room scores higher.
 - Selected-window count greater than threshold produces only `window_frequency`.
+- Selected mode rejects a missing boundary; rolling mode accepts stale, inverted date
+  values and ignores the inactive selected-window threshold.
 - Narrow boundaries remove outside records from totals and evidence ids.
 - Fuzzy hotel-name filtering matches ordered non-contiguous characters and
   multiple separators use AND semantics.
@@ -262,12 +275,13 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 #### Wrong
 
 ```ts
-await appApi.reanalyze({ ...settings, province: "安徽省" });
+await appApi.reanalyze({ ...settings, frequencyMode: "rolling", province: "安徽省" });
 ```
 
 #### Correct
 
 ```ts
+await appApi.reanalyze({ ...settings, frequencyMode: "rolling" });
 setQuery((current) => ({ ...current, hotelProvince: "安徽省", page: 1 }));
 const records = await appApi.getImportedRecords({ page: 1, pageSize: 50 });
 ```

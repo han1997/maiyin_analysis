@@ -3,8 +3,8 @@ use crate::error::{AppError, CommandError};
 use crate::exporter::{export_to, OperationResult};
 use crate::importer;
 use crate::model::{
-    AnalysisSettings, ImportedRecordsPage, ImportedRecordsQuery, PersonDetail, PersonPage,
-    PersonQuery, StoredSession, WorkspaceSnapshot, CURRENT_SCHEMA_VERSION,
+    AnalysisSettings, FrequencyMode, ImportedRecordsPage, ImportedRecordsQuery, PersonDetail,
+    PersonPage, PersonQuery, StoredSession, WorkspaceSnapshot, CURRENT_SCHEMA_VERSION,
 };
 use crate::storage::{SessionMetadata, SessionStore};
 use chrono::Local;
@@ -382,22 +382,34 @@ fn current_store(state: &State<'_, AppState>) -> Result<(SessionStore, String), 
 }
 
 fn validate_settings(settings: &AnalysisSettings) -> Result<(), AppError> {
-    for (label, value) in [
-        ("时间窗口", settings.frequency_threshold),
-        ("7 天", settings.week_threshold),
-        ("30 天", settings.month_threshold),
-        ("365 天", settings.year_threshold),
-    ] {
+    let thresholds = if settings.frequency_mode == FrequencyMode::Selected {
+        vec![("时间窗口", settings.frequency_threshold)]
+    } else {
+        vec![
+            ("7 天", settings.week_threshold),
+            ("30 天", settings.month_threshold),
+            ("365 天", settings.year_threshold),
+        ]
+    };
+    for (label, value) in thresholds {
         if !(1..=99_999).contains(&value) {
             return Err(AppError::Validation(format!(
                 "{label}阈值应在 1 到 99999 之间"
             )));
         }
     }
-    if settings
-        .frequency_start
-        .zip(settings.frequency_end)
-        .is_some_and(|(start, end)| start > end)
+    if settings.frequency_mode == FrequencyMode::Selected
+        && (settings.frequency_start.is_none() || settings.frequency_end.is_none())
+    {
+        return Err(AppError::Validation(
+            "选定入住时间范围时，开始时间和结束时间均为必填".into(),
+        ));
+    }
+    if settings.frequency_mode == FrequencyMode::Selected
+        && settings
+            .frequency_start
+            .zip(settings.frequency_end)
+            .is_some_and(|(start, end)| start > end)
     {
         return Err(AppError::Validation("入住开始时间不能晚于结束时间".into()));
     }
@@ -461,6 +473,20 @@ mod tests {
 
     #[test]
     fn validates_analysis_thresholds_and_time_order() {
+        let mut inactive_threshold = AnalysisSettings {
+            frequency_threshold: 0,
+            ..Default::default()
+        };
+        assert!(validate_settings(&inactive_threshold).is_ok());
+
+        inactive_threshold.frequency_start = chrono::NaiveDate::from_ymd_opt(2026, 7, 2)
+            .unwrap()
+            .and_hms_opt(0, 0, 0);
+        inactive_threshold.frequency_end = chrono::NaiveDate::from_ymd_opt(2026, 7, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0);
+        assert!(validate_settings(&inactive_threshold).is_ok());
+
         let mut settings = AnalysisSettings {
             week_threshold: 0,
             ..Default::default()
@@ -468,6 +494,9 @@ mod tests {
         assert!(validate_settings(&settings).is_err());
 
         settings.week_threshold = 3;
+        settings.frequency_mode = FrequencyMode::Selected;
+        assert!(validate_settings(&settings).is_err());
+
         settings.frequency_start = chrono::NaiveDate::from_ymd_opt(2026, 7, 2)
             .unwrap()
             .and_hms_opt(0, 0, 0);
@@ -475,5 +504,17 @@ mod tests {
             .unwrap()
             .and_hms_opt(0, 0, 0);
         assert!(validate_settings(&settings).is_err());
+
+        settings.frequency_start = chrono::NaiveDate::from_ymd_opt(2026, 7, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0);
+        assert!(validate_settings(&settings).is_ok());
+
+        inactive_threshold.frequency_mode = FrequencyMode::Selected;
+        inactive_threshold.frequency_start = settings.frequency_start;
+        inactive_threshold.frequency_end = settings.frequency_end;
+        inactive_threshold.frequency_threshold = 3;
+        inactive_threshold.week_threshold = 0;
+        assert!(validate_settings(&inactive_threshold).is_ok());
     }
 }

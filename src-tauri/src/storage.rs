@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use crate::model::{
-    AlertSummary, AnalysisSettings, AnalysisStats, ImportStats, ImportedRecordsPage,
+    AlertSummary, AnalysisSettings, AnalysisStats, FrequencyMode, ImportStats, ImportedRecordsPage,
     ImportedRecordsQuery, PersonAnalysis, PersonDetail, PersonPage, PersonQuery, PersonSummary,
     Record, SessionSummary, StoredSession,
 };
@@ -397,13 +397,15 @@ impl SessionStore {
             "check_in IS NOT NULL".to_string(),
         ];
         let mut values = vec![Value::Text(session_id.to_string())];
-        if let Some(start) = settings.frequency_start {
-            clauses.push("check_in >= ?".into());
-            values.push(Value::Text(start.format("%Y-%m-%d %H:%M:%S").to_string()));
-        }
-        if let Some(end) = settings.frequency_end {
-            clauses.push("check_in <= ?".into());
-            values.push(Value::Text(end.format("%Y-%m-%d %H:%M:%S").to_string()));
+        if settings.frequency_mode == FrequencyMode::Selected {
+            if let Some(start) = settings.frequency_start {
+                clauses.push("check_in >= ?".into());
+                values.push(Value::Text(start.format("%Y-%m-%d %H:%M:%S").to_string()));
+            }
+            if let Some(end) = settings.frequency_end {
+                clauses.push("check_in <= ?".into());
+                values.push(Value::Text(end.format("%Y-%m-%d %H:%M:%S").to_string()));
+            }
         }
         let where_sql = clauses.join(" AND ");
         let total: i64 = connection
@@ -1124,6 +1126,7 @@ mod tests {
         session.settings.frequency_start = chrono::NaiveDate::from_ymd_opt(2026, 7, 2)
             .unwrap()
             .and_hms_opt(0, 0, 0);
+        session.settings.frequency_mode = FrequencyMode::Selected;
         session.settings.frequency_end = chrono::NaiveDate::from_ymd_opt(2026, 7, 10)
             .unwrap()
             .and_hms_opt(23, 59, 59);
@@ -1164,6 +1167,19 @@ mod tests {
             .unwrap();
         assert_eq!(clamped.page_size, 500);
         assert_eq!(clamped.items.len(), 2);
+
+        session.settings.frequency_mode = FrequencyMode::Rolling;
+        store.save(&session).unwrap();
+        let rolling = store
+            .query_imported_records(
+                "session-1",
+                &ImportedRecordsQuery {
+                    page: 1,
+                    page_size: 50,
+                },
+            )
+            .unwrap();
+        assert_eq!(rolling.total, 3);
         fs::remove_dir_all(root).unwrap();
     }
 

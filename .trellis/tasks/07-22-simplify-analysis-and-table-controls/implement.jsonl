@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Cross-layer AnalysisSettings DTO contract — add frequencyMode and ensure Rust honors explicit mode"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite pagination query conventions for people and import-records page-size support"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Per-table page-size state management, reset to page 1 on size change, applied-query loading"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Progressive disclosure popover close behavior (outside-click/Escape/mutual-exclusion) and interaction testing"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "frequencyMode union type and AnalysisSettings frontend typing"}

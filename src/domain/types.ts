@@ -2,6 +2,7 @@ export type RiskLevel = "高风险" | "中风险" | "关注" | "正常";
 export type Severity = "高" | "中" | "低";
 
 export interface AnalysisSettings {
+  frequencyMode: "rolling" | "selected";
   frequencyStart: string | null;
   frequencyEnd: string | null;
   frequencyThreshold: number;
@@ -172,6 +173,7 @@ export interface OperationResult {
 }
 
 export const DEFAULT_SETTINGS: AnalysisSettings = {
+  frequencyMode: "rolling",
   frequencyStart: null,
   frequencyEnd: null,
   frequencyThreshold: 3,

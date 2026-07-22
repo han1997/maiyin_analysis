@@ -1,6 +1,6 @@
 use crate::model::{
-    AlertSummary, AnalysisSettings, AnalysisStats, HotelRegion, PersonAnalysis, PersonSummary,
-    Record,
+    AlertSummary, AnalysisSettings, AnalysisStats, FrequencyMode, HotelRegion, PersonAnalysis,
+    PersonSummary, Record,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 use rayon::prelude::*;
@@ -147,8 +147,7 @@ fn analyze_person(
     let week_records = max_window_records(&records, 7);
     let month_records = max_window_records(&records, 30);
     let year_records = max_window_records(&records, 365);
-    let use_selected_window =
-        settings.frequency_start.is_some() || settings.frequency_end.is_some();
+    let use_selected_window = settings.frequency_mode == FrequencyMode::Selected;
     if use_selected_window && records.len() > settings.frequency_threshold {
         alerts.push(frequency_alert(
             "window_frequency",
@@ -280,6 +279,9 @@ pub fn within_analysis_time_window(record: &Record, settings: &AnalysisSettings)
     let Some(check_in) = record.check_in else {
         return false;
     };
+    if settings.frequency_mode != FrequencyMode::Selected {
+        return true;
+    }
     if settings
         .frequency_start
         .is_some_and(|start| check_in < start)
@@ -442,9 +444,13 @@ mod tests {
             ));
         }
         let settings = AnalysisSettings {
+            frequency_mode: FrequencyMode::Selected,
             frequency_start: NaiveDate::from_ymd_opt(2026, 5, 1)
                 .unwrap()
                 .and_hms_opt(0, 0, 0),
+            frequency_end: NaiveDate::from_ymd_opt(2026, 5, 4)
+                .unwrap()
+                .and_hms_opt(23, 59, 59),
             ..Default::default()
         };
         let analyses = analyze_records(&records, &settings).0;
@@ -461,6 +467,7 @@ mod tests {
             record(3, "302", "2026-05-01 10:00", "2026-05-01 12:00"),
         ];
         let settings = AnalysisSettings {
+            frequency_mode: FrequencyMode::Selected,
             frequency_start: NaiveDate::from_ymd_opt(2026, 5, 1)
                 .unwrap()
                 .and_hms_opt(0, 0, 0),
@@ -473,6 +480,32 @@ mod tests {
         assert_eq!(analyses[0].summary.total_records, 2);
         assert_eq!(stats.records, 2);
         assert_eq!(analyses[0].alerts[0].evidence_ids, vec![2, 3]);
+    }
+
+    #[test]
+    fn rolling_frequency_mode_ignores_stale_time_boundaries() {
+        let records = vec![
+            record(1, "301", "2026-05-01 09:30", "2026-05-01 13:00"),
+            record(2, "301", "2026-05-02 09:30", "2026-05-02 13:00"),
+            record(3, "301", "2026-05-03 09:30", "2026-05-03 13:00"),
+            record(4, "301", "2026-05-04 09:30", "2026-05-04 13:00"),
+        ];
+        let settings = AnalysisSettings {
+            frequency_mode: FrequencyMode::Rolling,
+            frequency_start: NaiveDate::from_ymd_opt(2026, 5, 2)
+                .unwrap()
+                .and_hms_opt(0, 0, 0),
+            frequency_end: NaiveDate::from_ymd_opt(2026, 5, 2)
+                .unwrap()
+                .and_hms_opt(23, 59, 59),
+            ..Default::default()
+        };
+        let analyses = analyze_records(&records, &settings).0;
+        assert_eq!(analyses[0].summary.total_records, 4);
+        assert!(analyses[0]
+            .alerts
+            .iter()
+            .any(|alert| alert.kind == "week_frequency"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { appApi } from "./api";
 import { Icon } from "./components/Icon";
 import { RiskBadge, SeverityBadge } from "./components/RiskBadge";
@@ -28,6 +28,7 @@ const exportActions: Array<{ kind: ExportKind; label: string }> = [
   { kind: "risk_xlsx", label: "风险合并 Excel" },
   { kind: "raw_csv", label: "规范化原始 CSV" },
 ];
+const pageSizeOptions = [50, 100, 200] as const;
 
 const initialQuery: PersonQuery = {
   search: "",
@@ -75,7 +76,14 @@ function App() {
   const [activeView, setActiveView] = useState<"people" | "records">("people");
   const [recordsPage, setRecordsPage] = useState<ImportedRecordsPage>(initialRecordsPage);
   const [recordsPageNumber, setRecordsPageNumber] = useState(1);
+  const [recordsPageSize, setRecordsPageSize] = useState(initialRecordsPage.pageSize);
   const [recordsPageLoading, setRecordsPageLoading] = useState(false);
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const filterMenuRef = useRef<HTMLDivElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const filterTriggerRef = useRef<HTMLButtonElement>(null);
+  const exportTriggerRef = useRef<HTMLButtonElement>(null);
   const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<PersonDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -148,7 +156,7 @@ function App() {
         if (!active) return null;
         setRecordsPageLoading(true);
         setRecordsPage((current) => ({ ...current, items: [], page: recordsPageNumber }));
-        return appApi.getImportedRecords({ page: recordsPageNumber, pageSize: initialRecordsPage.pageSize });
+        return appApi.getImportedRecords({ page: recordsPageNumber, pageSize: recordsPageSize });
       })
       .then((nextPage) => {
         if (active && nextPage) setRecordsPage(nextPage);
@@ -162,7 +170,29 @@ function App() {
     return () => {
       active = false;
     };
-  }, [activeView, recordsPageNumber, snapshot]);
+  }, [activeView, recordsPageNumber, recordsPageSize, snapshot]);
+
+  useEffect(() => {
+    if (!filterMenuOpen && !exportMenuOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (filterMenuOpen && !filterMenuRef.current?.contains(target)) setFilterMenuOpen(false);
+      if (exportMenuOpen && !exportMenuRef.current?.contains(target)) setExportMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (filterMenuOpen) filterTriggerRef.current?.focus();
+      if (exportMenuOpen) exportTriggerRef.current?.focus();
+      setFilterMenuOpen(false);
+      setExportMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [exportMenuOpen, filterMenuOpen]);
 
   const totalPages = Math.max(1, Math.ceil(page.total / page.pageSize));
   const recordsTotalPages = Math.max(1, Math.ceil(recordsPage.total / recordsPage.pageSize));
@@ -178,8 +208,10 @@ function App() {
         setDraftSettings(structuredClone(next.settings));
         setQuery((current) => ({ ...current, page: 1 }));
         setDetail(null);
-        setRecordsPage(initialRecordsPage);
+        setRecordsPage({ ...initialRecordsPage, pageSize: recordsPageSize });
         setRecordsPageNumber(1);
+        setFilterMenuOpen(false);
+        setExportMenuOpen(false);
         setSelectedSessions(new Set(next.sourceSessionIds));
         return true;
       }
@@ -216,11 +248,18 @@ function App() {
 
   async function applySettings() {
     if (!draftSettings) return;
-    if ([draftSettings.frequencyThreshold, draftSettings.weekThreshold, draftSettings.monthThreshold, draftSettings.yearThreshold].some((value) => value < 1)) {
+    const activeThresholds = draftSettings.frequencyMode === "selected"
+      ? [draftSettings.frequencyThreshold]
+      : [draftSettings.weekThreshold, draftSettings.monthThreshold, draftSettings.yearThreshold];
+    if (activeThresholds.some((value) => value < 1)) {
       setToast({ tone: "error", message: "频次阈值必须是大于 0 的整数。" });
       return;
     }
-    if (draftSettings.frequencyStart && draftSettings.frequencyEnd && draftSettings.frequencyStart > draftSettings.frequencyEnd) {
+    if (draftSettings.frequencyMode === "selected" && (!draftSettings.frequencyStart || !draftSettings.frequencyEnd)) {
+      setToast({ tone: "error", message: "选定入住时间范围时，开始时间和结束时间均为必填。" });
+      return;
+    }
+    if (draftSettings.frequencyMode === "selected" && draftSettings.frequencyStart! > draftSettings.frequencyEnd!) {
       setToast({ tone: "error", message: "入住开始时间不能晚于结束时间。" });
       return;
     }
@@ -234,11 +273,13 @@ function App() {
       setToast({ tone: "error", message: "最小年龄不能大于最大年龄。" });
       return;
     }
+    setFilterMenuOpen(false);
     setQuery({ ...filterDraft, page: 1 });
   }
 
   async function exportResult(kind: ExportKind) {
     try {
+      setExportMenuOpen(false);
       setBusy("export");
       const result = await appApi.exportResult(kind);
       setToast({ tone: result.path ? "success" : "info", message: result.message });
@@ -473,8 +514,14 @@ function App() {
               page={recordsPage}
               loading={recordsPageLoading}
               showSensitive={showSensitive}
+              timeScoped={snapshot.settings.frequencyMode === "selected"}
               totalPages={recordsTotalPages}
               onPageChange={setRecordsPageNumber}
+              onPageSizeChange={(pageSize) => {
+                setRecordsPageNumber(1);
+                setRecordsPageSize(pageSize);
+                setRecordsPage((current) => ({ ...current, page: 1, pageSize }));
+              }}
             />
           ) : <section className="results-region" id="people-panel" role="tabpanel" aria-labelledby="people-tab" aria-label="人员分析结果">
             <div className="result-toolbar">
@@ -492,9 +539,19 @@ function App() {
                 {riskLevels.map((level) => <option key={level}>{level}</option>)}
               </select>
               <button className="button button-primary compact" type="button" onClick={applyResultFilters}>应用筛选</button>
-              <details className="toolbar-menu filter-menu">
-                <summary className="button button-quiet compact"><Icon name="filter" size={16} /> 更多筛选{activeExtraFilterCount(filterDraft) > 0 && <span className="filter-count">{activeExtraFilterCount(filterDraft)}</span>}</summary>
-                <div className="toolbar-popover filter-popover">
+              <div className="toolbar-menu filter-menu" data-open={filterMenuOpen} ref={filterMenuRef}>
+                <button
+                  className="button button-quiet compact toolbar-trigger"
+                  type="button"
+                  aria-expanded={filterMenuOpen}
+                  aria-controls="filter-popover"
+                  ref={filterTriggerRef}
+                  onClick={() => {
+                    setFilterMenuOpen((open) => !open);
+                    setExportMenuOpen(false);
+                  }}
+                ><Icon name="filter" size={16} /> 更多筛选{activeExtraFilterCount(filterDraft) > 0 && <span className="filter-count">{activeExtraFilterCount(filterDraft)}</span>}</button>
+                {filterMenuOpen && <div className="toolbar-popover filter-popover" id="filter-popover">
                   <section className="filter-group" aria-labelledby="hotel-filter-title">
                     <div className="filter-group-heading"><strong id="hotel-filter-title">入住旅馆</strong><span>多个名称用逗号分隔，需全部命中</span></div>
                     <label className="field filter-wide-field"><span>旅馆名称</span><input placeholder="例如：旅馆 A，旅馆 B" value={filterDraft.hotelSearch} onChange={(event) => setFilterDraft((current) => ({ ...current, hotelSearch: event.target.value }))} /></label>
@@ -526,25 +583,38 @@ function App() {
                       <label className="field"><span>预警状态</span><select value={filterDraft.alertState} onChange={(event) => setFilterDraft((current) => ({ ...current, alertState: event.target.value as PersonQuery["alertState"] }))}><option>全部人员</option><option>仅预警人员</option><option>未预警人员</option></select></label>
                     </div>
                   </section>
-                  <div className="popover-actions"><button className="text-button" type="button" onClick={() => { setFilterDraft(initialQuery); setQuery(initialQuery); }}>清除全部筛选</button></div>
-                </div>
-              </details>
+                  <div className="popover-actions"><button className="text-button" type="button" onClick={() => {
+                    setFilterDraft((current) => ({ ...initialQuery, pageSize: current.pageSize }));
+                    setQuery((current) => ({ ...initialQuery, pageSize: current.pageSize }));
+                  }}>清除全部筛选</button></div>
+                </div>}
+              </div>
               <div className="toolbar-spacer" />
-              <details className="toolbar-menu export-menu">
-                <summary className="button button-secondary compact"><Icon name="download" size={16} /> 导出</summary>
-                <div className="toolbar-popover export-popover" aria-label="导出当前结果">
+              <div className="toolbar-menu export-menu" data-open={exportMenuOpen} ref={exportMenuRef}>
+                <button
+                  className="button button-secondary compact toolbar-trigger"
+                  type="button"
+                  aria-expanded={exportMenuOpen}
+                  aria-controls="export-popover"
+                  ref={exportTriggerRef}
+                  onClick={() => {
+                    setExportMenuOpen((open) => !open);
+                    setFilterMenuOpen(false);
+                  }}
+                ><Icon name="download" size={16} /> 导出</button>
+                {exportMenuOpen && <div className="toolbar-popover export-popover" id="export-popover" aria-label="导出当前结果">
                   {exportActions.map((action) => <button key={action.kind} type="button" disabled={busy === "export"} onClick={() => exportResult(action.kind)}><span>{action.label}</span><Icon name="chevronRight" size={15} /></button>)}
-                </div>
-              </details>
+                </div>}
+              </div>
             </div>
 
             <div className="table-frame" aria-busy={pageLoading}>
-              <table>
+              <table className="people-table">
                 <thead>
                   <tr>
-                    <th scope="col">人员</th><th scope="col">户籍地</th><th scope="col" className="numeric">记录</th>
-                    <th scope="col" className="numeric">7 天</th><th scope="col" className="numeric">30 天</th><th scope="col" className="numeric">365 天</th>
-                    <th scope="col">预警依据</th><th scope="col" className="numeric">风险分</th><th scope="col">等级</th><th scope="col"><span className="sr-only">查看</span></th>
+                    <th scope="col" className="people-col-person">人员</th><th scope="col" className="people-col-household">户籍地</th><th scope="col" className="numeric people-col-count">记录</th>
+                    <th scope="col" className="numeric people-col-frequency">7 天</th><th scope="col" className="numeric people-col-frequency">30 天</th><th scope="col" className="numeric people-col-frequency">365 天</th>
+                    <th scope="col" className="people-col-alerts">预警依据</th><th scope="col" className="numeric people-col-score">风险分</th><th scope="col" className="people-col-level">等级</th><th scope="col" className="people-col-action"><span className="sr-only">查看</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -573,7 +643,10 @@ function App() {
             </div>
 
             <footer className="table-footer">
-              <span>共 {formatInteger(page.total)} 人，每页 {page.pageSize} 人</span>
+              <div className="page-summary"><span>共 {formatInteger(page.total)} 人</span><PageSizeSelect label="人员每页数量" unit="人" value={query.pageSize} onChange={(pageSize) => {
+                setFilterDraft((current) => ({ ...current, page: 1, pageSize }));
+                setQuery((current) => ({ ...current, page: 1, pageSize }));
+              }} /></div>
               <div className="pagination">
                 <button className="icon-button" type="button" aria-label="上一页" disabled={pageLoading || query.page <= 1} onClick={() => setQuery((current) => ({ ...current, page: current.page - 1 }))}><Icon name="chevronLeft" /></button>
                 <span>第 {query.page} / {totalPages} 页</span>
@@ -616,20 +689,24 @@ function ImportedRecordsTable({
   page,
   loading,
   showSensitive,
+  timeScoped,
   totalPages,
   onPageChange,
+  onPageSizeChange,
 }: {
   page: ImportedRecordsPage;
   loading: boolean;
   showSensitive: boolean;
+  timeScoped: boolean;
   totalPages: number;
   onPageChange: (page: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
 }) {
   return (
     <section className="results-region records-region" id="records-panel" role="tabpanel" aria-labelledby="records-tab" aria-label="导入入住记录">
-      <div className="records-heading"><div><strong>当前分析时间范围内的入住记录</strong><span>共 {formatInteger(page.total)} 条，仅按入住时间边界筛选</span></div></div>
+      <div className="records-heading"><div><strong>{timeScoped ? "当前选定时间范围内的入住记录" : "当前会话的有效入住记录"}</strong><span>共 {formatInteger(page.total)} 条，{timeScoped ? "按入住时间边界筛选" : "未启用时间范围筛选"}</span></div></div>
       <div className="table-frame" aria-busy={loading}>
-        <table>
+        <table className="records-table">
           <thead><tr><th>人员</th><th>旅馆 / 房号</th><th>入住时间</th><th>退房时间</th><th>户籍地</th><th>来源</th><th>数据状态</th></tr></thead>
           <tbody>{page.items.map((record) => (
             <tr key={record.uid}>
@@ -643,10 +720,10 @@ function ImportedRecordsTable({
             </tr>
           ))}</tbody>
         </table>
-        {loading && page.items.length === 0 ? <TableSkeleton label="正在加载导入记录" /> : page.items.length === 0 && <div className="no-results"><Icon name="file" size={22} /><strong>当前分析时间范围内没有入住记录</strong><span>可调整分析时间范围后重新分析。</span></div>}
+        {loading && page.items.length === 0 ? <TableSkeleton label="正在加载导入记录" /> : page.items.length === 0 && <div className="no-results"><Icon name="file" size={22} /><strong>{timeScoped ? "当前选定时间范围内没有入住记录" : "当前会话没有有效入住记录"}</strong><span>{timeScoped ? "可调整分析时间范围后重新分析。" : "请检查导入文件中的入住时间字段。"}</span></div>}
       </div>
       <footer className="table-footer">
-        <span>共 {formatInteger(page.total)} 条，每页 {page.pageSize} 条</span>
+        <div className="page-summary"><span>共 {formatInteger(page.total)} 条</span><PageSizeSelect label="导入记录每页数量" unit="条" value={page.pageSize} onChange={onPageSizeChange} /></div>
         <div className="pagination">
           <button className="icon-button" type="button" aria-label="导入记录上一页" disabled={loading || page.page <= 1} onClick={() => onPageChange(page.page - 1)}><Icon name="chevronLeft" /></button>
           <span>第 {page.page} / {totalPages} 页</span>
@@ -654,6 +731,18 @@ function ImportedRecordsTable({
         </div>
       </footer>
     </section>
+  );
+}
+
+function PageSizeSelect({ label, unit, value, onChange }: { label: string; unit: string; value: number; onChange: (value: number) => void }) {
+  return (
+    <label className="page-size-control">
+      <span>每页</span>
+      <select aria-label={label} value={value} onChange={(event) => onChange(Number(event.target.value))}>
+        {pageSizeOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+      <span>{unit}</span>
+    </label>
   );
 }
 
@@ -715,9 +804,15 @@ function SettingsPanel({ settings, onChange, onClose, onApply, busy }: { setting
     <div className="panel-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <header><div><span className="detail-kicker">当前会话</span><h2 id="settings-title">分析参数</h2><p>时间范围和频次规则会重新计算统计与风险；人员筛选在结果列表中应用。</p></div><button className="icon-button" type="button" aria-label="关闭参数" onClick={onClose}><Icon name="close" /></button></header>
-        <div className="settings-content">
-          <fieldset><legend>选定入住时间范围</legend><p className="fieldset-help">设置任一边界后，仅按范围内记录分析，并停用滚动 7/30/365 天频次计分。</p><div className="field-grid three"><DateTimeField label="开始时间" value={settings.frequencyStart} onChange={(value) => update("frequencyStart", value)}/><DateTimeField label="结束时间" value={settings.frequencyEnd} onChange={(value) => update("frequencyEnd", value)}/><NumberField label="范围内入住阈值" value={settings.frequencyThreshold} onChange={(value) => update("frequencyThreshold", value ?? 1)} required/></div></fieldset>
-          <fieldset><legend>高频入住阈值</legend><p className="fieldset-help">未设置入住时间边界时，滚动频次规则生效。</p><div className="field-grid three"><NumberField label="7 天" value={settings.weekThreshold} onChange={(value) => update("weekThreshold", value ?? 1)} required/><NumberField label="30 天" value={settings.monthThreshold} onChange={(value) => update("monthThreshold", value ?? 1)} required/><NumberField label="365 天" value={settings.yearThreshold} onChange={(value) => update("yearThreshold", value ?? 1)} required/></div></fieldset>
+        <div className="settings-content analysis-mode-list" role="radiogroup" aria-label="频次分析方式">
+          <section className={`analysis-mode-option ${settings.frequencyMode === "rolling" ? "is-selected" : ""}`}>
+            <label className="analysis-mode-selector"><input type="radio" name="frequency-mode" value="rolling" checked={settings.frequencyMode === "rolling"} onChange={() => update("frequencyMode", "rolling")} /><span><strong>高频入住阈值</strong><small>按滚动 7、30、365 天统计高频入住，适合日常研判。</small></span></label>
+            <fieldset className="analysis-mode-fields" disabled={settings.frequencyMode !== "rolling"}><legend className="sr-only">滚动频次参数</legend><div className="field-grid three"><NumberField label="7 天" value={settings.weekThreshold} onChange={(value) => update("weekThreshold", value ?? 1)} required/><NumberField label="30 天" value={settings.monthThreshold} onChange={(value) => update("monthThreshold", value ?? 1)} required/><NumberField label="365 天" value={settings.yearThreshold} onChange={(value) => update("yearThreshold", value ?? 1)} required/></div></fieldset>
+          </section>
+          <section className={`analysis-mode-option ${settings.frequencyMode === "selected" ? "is-selected" : ""}`}>
+            <label className="analysis-mode-selector"><input type="radio" name="frequency-mode" value="selected" checked={settings.frequencyMode === "selected"} onChange={() => update("frequencyMode", "selected")} /><span><strong>选定入住时间范围</strong><small>仅分析指定起止时间内的记录，并使用范围内入住阈值。</small></span></label>
+            <fieldset className="analysis-mode-fields" disabled={settings.frequencyMode !== "selected"}><legend className="sr-only">选定范围参数</legend><div className="field-grid three"><DateTimeField label="开始时间" value={settings.frequencyStart} onChange={(value) => update("frequencyStart", value)} required/><DateTimeField label="结束时间" value={settings.frequencyEnd} onChange={(value) => update("frequencyEnd", value)} required/><NumberField label="范围内入住阈值" value={settings.frequencyThreshold} onChange={(value) => update("frequencyThreshold", value ?? 1)} required/></div></fieldset>
+          </section>
         </div>
         <footer><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" type="button" disabled={busy} onClick={onApply}>{busy ? "正在计算" : "应用参数并重新分析"}</button></footer>
       </section>
@@ -733,8 +828,8 @@ function NumberField({ label, value, onChange, required = false }: { label: stri
   return <label className="field"><span>{label}</span><input type="number" min="0" required={required} value={value ?? ""} placeholder="不限" onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))} /></label>;
 }
 
-function DateTimeField({ label, value, onChange }: { label: string; value: string | null; onChange: (value: string | null) => void }) {
-  return <label className="field"><span>{label}</span><input type="datetime-local" value={value?.slice(0, 16) ?? ""} onChange={(event) => onChange(event.target.value ? `${event.target.value}:00` : null)} /></label>;
+function DateTimeField({ label, value, onChange, required = false }: { label: string; value: string | null; onChange: (value: string | null) => void; required?: boolean }) {
+  return <label className="field"><span>{label}</span><input type="datetime-local" required={required} value={value?.slice(0, 16) ?? ""} onChange={(event) => onChange(event.target.value ? `${event.target.value}:00` : null)} /></label>;
 }
 
 function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm }: { title: string; description: string; confirmLabel: string; onCancel: () => void; onConfirm: () => void }) {
@@ -757,14 +852,14 @@ function modeLabel(mode: WorkspaceSnapshot["mode"]): string {
 }
 
 function frequencyScopeLabel(settings: AnalysisSettings): string {
-  if (settings.frequencyStart || settings.frequencyEnd) return `选定范围 ≥ ${settings.frequencyThreshold} 次`;
+  if (settings.frequencyMode === "selected") return `选定范围 ≥ ${settings.frequencyThreshold} 次`;
   return `7/30/365 天：${settings.weekThreshold}/${settings.monthThreshold}/${settings.yearThreshold} 次`;
 }
 
 function analysisTimeScopeLabel(settings: AnalysisSettings): string {
-  if (!settings.frequencyStart && !settings.frequencyEnd) return "全部有效入住";
-  const start = settings.frequencyStart?.replace("T", " ") ?? "最早记录";
-  const end = settings.frequencyEnd?.replace("T", " ") ?? "最新记录";
+  if (settings.frequencyMode !== "selected") return "全部有效入住";
+  const start = settings.frequencyStart?.replace("T", " ") ?? "未设置";
+  const end = settings.frequencyEnd?.replace("T", " ") ?? "未设置";
   return `${start} 至 ${end}`;
 }
 

@@ -29,6 +29,10 @@ The analysis workspace is a dense desktop tool. Keep the primary path visible an
 - Show a count on the secondary-filter trigger when non-default criteria are active.
 - Keep analysis settings editable in `SettingsPanel`; the sidebar may show a read-only summary and a single entry point.
 - Interactive controls require visible focus, hover, active, disabled, and loading feedback.
+- Analysis-mode choices use native radio semantics. The inactive parameter group remains
+  visible for comparison but is disabled and visually de-emphasized.
+- Data-table column widths use table-specific semantic classes. Do not use global
+  `th:nth-child(...)` rules because column additions silently shift unrelated widths.
 
 ---
 
@@ -36,6 +40,8 @@ The analysis workspace is a dense desktop tool. Keep the primary path visible an
 
 - Run `npm test`, `npm run lint`, and `npm run build` for every frontend interaction change.
 - Tests for progressive disclosure must assert that the trigger starts closed, opens on activation, and exposes the expected controls or actions.
+- Toolbar disclosure tests also cover outside-pointer close, `Escape`, mutual exclusion,
+  and `aria-expanded` state.
 - Existing workspace smoke tests must continue to assert that the table and person-detail entry points render.
 - SQLite query tests cover multi-hotel AND matching, same-stay jurisdiction matching, and person filters. Frontend tests cover age validation, asynchronous page rendering, and the absence of result filters from `SettingsPanel`.
 

@@ -45,6 +45,12 @@ interface ImportedRecordsPage {
   Entering the tab or changing its page requests exactly one `ImportedRecordsPage`.
 - Snapshot-changing actions reset imported records to page `1`; late responses are ignored
   after effect cleanup just like people-page requests.
+- People and imported-record page-size controls offer exactly `50`, `100`, and `200`,
+  default to `50`, and reset only their own page number to `1`. Result-filter application
+  and clearing preserve the chosen people page size.
+- Secondary filter and export disclosures are controlled React state, are mutually
+  exclusive, and close on outside pointer interaction or `Escape`. `Escape` restores
+  focus to the disclosure trigger.
 
 ### 4. Validation & Error Matrix
 
@@ -56,6 +62,8 @@ interface ImportedRecordsPage {
 | User changes page while a request is active | Pagination buttons remain disabled |
 | An older request resolves after cleanup | Ignore its result |
 | Imported-record page request fails | Stop only the records skeleton, keep both view tabs usable, and show the structured error toast |
+| Page size changes | Reset that table to page `1`, clear old rows during loading, and request the chosen size |
+| Outside pointer or `Escape` while a toolbar disclosure is open | Close it; do not discard filter drafts |
 
 ### 5. Good / Base / Bad Cases
 
@@ -64,9 +72,13 @@ interface ImportedRecordsPage {
   whose total was computed by SQLite.
 - Good: switching to imported records leaves the shell usable while a 50-row page loads;
   switching sessions clears old rows and requests page `1`.
+- Good: the filter popover escapes the result card's clipping boundary, constrains its
+  height to the viewport, and scrolls internally so every field remains reachable.
 - Base: browser preview waits for its fixture adapter and renders the same table shape.
 - Bad: deriving `page` with `filterPeople(snapshot.people, query)` in `App.tsx`.
 - Bad: leaving old-session rows visible while the next session page is loading.
+- Bad: uncontrolled native `details` disclosures that stay open after outside clicks or
+  allow filter and export popovers to overlap.
 
 ### 6. Tests Required
 
@@ -76,6 +88,10 @@ interface ImportedRecordsPage {
 - Loading controls expose a stable table and accessible busy status.
 - View tabs expose `tablist`, `tab`, `aria-selected`, and linked `tabpanel` semantics;
   imported-record next-page interaction renders the next fixture page.
+- Page-size tests assert both tables expose `50/100/200`, reset to page `1`, and keep the
+  selection through result-filter changes.
+- Disclosure tests assert mutual exclusion, outside-pointer close, `Escape` close, and
+  accessible `aria-expanded` state.
 - `npm test`, `npm run lint`, and `npm run build` pass after contract changes.
 
 ### 7. Wrong vs Correct
@@ -90,6 +106,7 @@ const page = filterPeople(snapshot.people, query);
 
 ```ts
 const page = await appApi.queryPeople(query);
+setQuery((current) => ({ ...current, page: 1, pageSize: 100 }));
 ```
 
 The correct path keeps the WebView memory and IPC payload proportional to page size.

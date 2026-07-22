@@ -1,11 +1,20 @@
 use chrono::{NaiveDate, NaiveDateTime};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FrequencyMode {
+    #[default]
+    Rolling,
+    Selected,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AnalysisSettings {
+    pub frequency_mode: FrequencyMode,
     pub frequency_start: Option<NaiveDateTime>,
     pub frequency_end: Option<NaiveDateTime>,
     pub frequency_threshold: usize,
@@ -17,6 +26,7 @@ pub struct AnalysisSettings {
 impl Default for AnalysisSettings {
     fn default() -> Self {
         Self {
+            frequency_mode: FrequencyMode::Rolling,
             frequency_start: None,
             frequency_end: None,
             frequency_threshold: 3,
@@ -24,6 +34,58 @@ impl Default for AnalysisSettings {
             month_threshold: 12,
             year_threshold: 144,
         }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct AnalysisSettingsPayload {
+    frequency_mode: Option<FrequencyMode>,
+    frequency_start: Option<NaiveDateTime>,
+    frequency_end: Option<NaiveDateTime>,
+    frequency_threshold: usize,
+    week_threshold: usize,
+    month_threshold: usize,
+    year_threshold: usize,
+}
+
+impl Default for AnalysisSettingsPayload {
+    fn default() -> Self {
+        let settings = AnalysisSettings::default();
+        Self {
+            frequency_mode: None,
+            frequency_start: settings.frequency_start,
+            frequency_end: settings.frequency_end,
+            frequency_threshold: settings.frequency_threshold,
+            week_threshold: settings.week_threshold,
+            month_threshold: settings.month_threshold,
+            year_threshold: settings.year_threshold,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AnalysisSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let payload = AnalysisSettingsPayload::deserialize(deserializer)?;
+        let frequency_mode = payload.frequency_mode.unwrap_or_else(|| {
+            if payload.frequency_start.is_some() || payload.frequency_end.is_some() {
+                FrequencyMode::Selected
+            } else {
+                FrequencyMode::Rolling
+            }
+        });
+        Ok(Self {
+            frequency_mode,
+            frequency_start: payload.frequency_start,
+            frequency_end: payload.frequency_end,
+            frequency_threshold: payload.frequency_threshold,
+            week_threshold: payload.week_threshold,
+            month_threshold: payload.month_threshold,
+            year_threshold: payload.year_threshold,
+        })
     }
 }
 
@@ -326,6 +388,17 @@ mod tests {
         .unwrap();
         assert_eq!(settings.week_threshold, 5);
         assert_eq!(settings.month_threshold, 12);
+        assert_eq!(settings.frequency_mode, FrequencyMode::Rolling);
         assert!(settings.frequency_start.is_none());
+    }
+
+    #[test]
+    fn legacy_time_boundaries_infer_selected_frequency_mode() {
+        let settings: AnalysisSettings = serde_json::from_value(serde_json::json!({
+            "frequencyStart": "2026-07-01T00:00:00",
+            "frequencyEnd": "2026-07-31T23:59:59"
+        }))
+        .unwrap();
+        assert_eq!(settings.frequency_mode, FrequencyMode::Selected);
     }
 }
