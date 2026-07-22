@@ -171,6 +171,79 @@ for entry in WalkDir::new(path).follow_links(false) {
 }
 ```
 
+## Scenario: importer determinism and performance
+
+### 1. Scope / Trigger
+
+Applies whenever workbook/CSV parsing, post-parse merge, duplicate detection, UID
+assignment, import statistics, or import benchmarks change.
+
+### 2. Signatures
+
+```rust
+importer::import_paths(paths: &[String]) -> Result<ImportedData, AppError>
+parse_file(path: &Path) -> Result<ParsedFile, AppError>
+merge_parsed_files(files: &[PathBuf], parsed: Vec<ParsedFile>) -> Result<ImportedData, AppError>
+```
+
+### 3. Contracts
+
+- File parsing may run in parallel, but the final imported record order and UID assignment
+  must follow the deterministic input file order and row order.
+- Duplicate detection must produce the same `duplicate_count` and retained records across
+  repeated imports of the same file list.
+- Dedup keys should avoid avoidable large joined-string allocation on hot paths; use a
+  structured hash key when fields are already available as typed values.
+- Multi-file import benchmarks must report parse time separately from merge/dedup time so
+  optimization work targets the actual bottleneck.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Empty supported file list | `validation_error` with supported extensions |
+| All parsed files empty or all rows filtered | `empty_import` with accumulated reasons |
+| Parallel parse failure in multiple files | Report the first error in deterministic input order |
+| Duplicate rows across files | Keep first deterministic occurrence; increment `duplicate_count` |
+
+### 5. Good / Base / Bad Cases
+
+- Good: parse files with Rayon, then merge parsed files in input order with preallocated
+  containers and structured `DeduplicationKey`.
+- Good: an ignored benchmark prints `parse_ms`, old/new `merge_ms`, and reduction percent.
+- Base: single-file imports still go through the same merge path and receive UID values
+  from `1..=records.len()`.
+- Bad: assigning UID inside parallel parse workers because worker completion order is not
+  the user-visible input order.
+- Bad: reintroducing a separator-joined string dedup key for every row in a large import.
+
+### 6. Tests Required
+
+- Repeated imports of the same multi-file list produce identical `(uid, source_file, id_no)`
+  identity and duplicate count.
+- Parallel parse errors remain ordered by input file list.
+- Ignored multi-file benchmark compares old/new merge behavior on the same parsed data and
+  asserts record count, duplicate count, and UID identity stay equal.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let key = fields.join("\u{1f}");
+```
+
+This clones fields and allocates one large separator string per imported row.
+
+#### Correct
+
+```rust
+let key = DeduplicationKey { id_no, hotel_name, check_in, check_out, /* ... */ };
+```
+
+Structured keys preserve equality semantics while avoiding the extra joined-string
+allocation in the merge/dedup hot path.
+
 ## Scenario: analysis ownership and result filtering
 
 ### 1. Scope / Trigger

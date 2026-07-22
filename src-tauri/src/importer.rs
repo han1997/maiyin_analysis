@@ -44,10 +44,31 @@ pub struct ImportedData {
     pub title: String,
 }
 
+#[derive(Clone)]
 struct ParsedFile {
     records: Vec<Record>,
     stats: ImportStats,
     reason: Option<String>,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+struct DeduplicationKey {
+    id_no: String,
+    hotel_name: String,
+    province: String,
+    city: String,
+    county: String,
+    region: String,
+    address: String,
+    room_no: String,
+    check_in: DateKey,
+    check_out: DateKey,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+enum DateKey {
+    Parsed(NaiveDateTime),
+    Raw(String),
 }
 
 pub fn discover_supported_files(paths: &[String]) -> Result<Vec<String>, AppError> {
@@ -108,10 +129,17 @@ pub fn import_paths(paths: &[String]) -> Result<ImportedData, AppError> {
         .collect::<Vec<_>>()
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
+    merge_parsed_files(&files, parsed)
+}
 
+fn merge_parsed_files(
+    files: &[PathBuf],
+    parsed: Vec<ParsedFile>,
+) -> Result<ImportedData, AppError> {
+    let total_records = parsed.iter().map(|file| file.records.len()).sum();
     let mut stats = ImportStats::default();
-    let mut records = Vec::new();
-    let mut seen = HashSet::new();
+    let mut records = Vec::with_capacity(total_records);
+    let mut seen = HashSet::with_capacity(total_records);
     let mut uid = 1_u64;
     let mut reasons = Vec::new();
     for parsed_file in parsed {
@@ -750,26 +778,25 @@ fn normalize_gender(value: &str, id_no: &str) -> String {
         .unwrap_or_default()
 }
 
-fn deduplication_key(record: &Record) -> String {
-    [
-        record.id_no.clone(),
-        record.hotel_name.clone(),
-        record.province.clone(),
-        record.city.clone(),
-        record.county.clone(),
-        record.region.clone(),
-        record.address.clone(),
-        record.room_no.clone(),
-        date_key(record.check_in, &record.check_in_text),
-        date_key(record.check_out, &record.check_out_text),
-    ]
-    .join("\u{1f}")
+fn deduplication_key(record: &Record) -> DeduplicationKey {
+    DeduplicationKey {
+        id_no: record.id_no.clone(),
+        hotel_name: record.hotel_name.clone(),
+        province: record.province.clone(),
+        city: record.city.clone(),
+        county: record.county.clone(),
+        region: record.region.clone(),
+        address: record.address.clone(),
+        room_no: record.room_no.clone(),
+        check_in: date_key(record.check_in, &record.check_in_text),
+        check_out: date_key(record.check_out, &record.check_out_text),
+    }
 }
 
-fn date_key(parsed: Option<NaiveDateTime>, raw: &str) -> String {
+fn date_key(parsed: Option<NaiveDateTime>, raw: &str) -> DateKey {
     parsed
-        .map(|value| format!("dt:{}", value.format("%Y-%m-%dT%H:%M:%S")))
-        .unwrap_or_else(|| format!("raw:{}", raw.trim()))
+        .map(DateKey::Parsed)
+        .unwrap_or_else(|| DateKey::Raw(raw.trim().to_string()))
 }
 
 fn nonempty(primary: String, fallback: &str) -> String {
@@ -797,8 +824,14 @@ fn file_name(path: &Path) -> String {
 
 #[cfg(test)]
 mod discovery_tests {
-    use super::{discover_supported_files, import_paths, legacy_cells_to_rows, parse_file};
+    use super::{
+        discover_supported_files, import_paths, legacy_cells_to_rows, merge_parsed_files,
+        parse_file, ParsedFile,
+    };
+    use crate::error::AppError;
+    use crate::model::{ImportStats, Record};
     use rayon::prelude::*;
+    use std::collections::HashSet;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -957,6 +990,162 @@ mod discovery_tests {
             reduction * 100.0,
         );
         assert_eq!(sequential.len(), parallel.len());
+    }
+
+    #[test]
+    #[ignore = "synthetic multi-file import benchmark"]
+    fn benchmark_synthetic_multi_file_import_merge() {
+        let root = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        let files = std::env::var("MAIYIN_BENCH_FILES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(15);
+        let rows_per_file = std::env::var("MAIYIN_BENCH_ROWS_PER_FILE")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(10_000);
+        let paths = (0..files)
+            .map(|file_index| {
+                let path = root.join(format!("import-{file_index:02}.csv"));
+                write_synthetic_import_csv(&path, file_index, rows_per_file);
+                path
+            })
+            .collect::<Vec<_>>();
+
+        let parse_started = std::time::Instant::now();
+        let parsed = paths
+            .par_iter()
+            .map(|path| parse_file(path))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let parse_elapsed = parse_started.elapsed();
+
+        let old_started = std::time::Instant::now();
+        let old = merge_parsed_files_baseline(&paths, parsed.clone()).unwrap();
+        let old_merge_elapsed = old_started.elapsed();
+
+        let new_started = std::time::Instant::now();
+        let new = merge_parsed_files(&paths, parsed).unwrap();
+        let new_merge_elapsed = new_started.elapsed();
+
+        assert_eq!(old.records.len(), new.records.len());
+        assert_eq!(old.stats.duplicate_count, new.stats.duplicate_count);
+        assert_eq!(
+            old.records
+                .iter()
+                .map(|record| (record.uid, record.source_file.clone(), record.id_no.clone()))
+                .collect::<Vec<_>>(),
+            new.records
+                .iter()
+                .map(|record| (record.uid, record.source_file.clone(), record.id_no.clone()))
+                .collect::<Vec<_>>()
+        );
+        let reduction = 1.0
+            - new_merge_elapsed.as_secs_f64() / old_merge_elapsed.as_secs_f64().max(f64::EPSILON);
+        println!(
+            "files={} rows_per_file={} records={} duplicates={} parse_ms={} old_merge_ms={} new_merge_ms={} merge_reduction_percent={:.1}",
+            files,
+            rows_per_file,
+            new.records.len(),
+            new.stats.duplicate_count,
+            parse_elapsed.as_millis(),
+            old_merge_elapsed.as_millis(),
+            new_merge_elapsed.as_millis(),
+            reduction * 100.0,
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn write_synthetic_import_csv(path: &PathBuf, file_index: usize, rows: usize) {
+        let mut content = String::from("姓名,身份证号码,旅馆名称,入住时间,退房时间\n");
+        for row in 0..rows {
+            let duplicate_bucket = if row % 100 == 0 { 0 } else { file_index };
+            let id_no = format!(
+                "341024198809{:02}{:04}",
+                (row % 28) + 1,
+                duplicate_bucket * rows + row
+            );
+            let day = (row % 28) + 1;
+            content.push_str(&format!(
+                "人员{file_index}_{row},{id_no},旅馆{},2026-05-{day:02} 10:00,2026-05-{day:02} 12:00\n",
+                row % 32
+            ));
+        }
+        fs::write(path, content).unwrap();
+    }
+
+    fn merge_parsed_files_baseline(
+        files: &[PathBuf],
+        parsed: Vec<ParsedFile>,
+    ) -> Result<super::ImportedData, AppError> {
+        let mut stats = ImportStats::default();
+        let mut records = Vec::new();
+        let mut seen = HashSet::new();
+        let mut uid = 1_u64;
+        let mut reasons = Vec::new();
+        for parsed_file in parsed {
+            stats.short_stay_count += parsed_file.stats.short_stay_count;
+            stats.missing_id_count += parsed_file.stats.missing_id_count;
+            if let Some(reason) = parsed_file.reason {
+                reasons.push(reason);
+            }
+            for mut record in parsed_file.records {
+                let key = baseline_deduplication_key(&record);
+                if !seen.insert(key) {
+                    stats.duplicate_count += 1;
+                    continue;
+                }
+                record.uid = uid;
+                records.push(record);
+                uid += 1;
+            }
+        }
+
+        if records.is_empty() {
+            let detail = if reasons.is_empty() {
+                "记录为空、缺少必填字段，或全部入住不足 10 分钟".into()
+            } else {
+                reasons.join("；")
+            };
+            return Err(AppError::Empty(detail));
+        }
+        stats.imported = records.len();
+        let title = if files.len() == 1 {
+            super::file_name(&files[0])
+        } else {
+            format!("{} 个导入文件", files.len())
+        };
+        Ok(super::ImportedData {
+            records,
+            stats,
+            file_count: files.len(),
+            title,
+        })
+    }
+
+    fn baseline_deduplication_key(record: &Record) -> String {
+        [
+            record.id_no.clone(),
+            record.hotel_name.clone(),
+            record.province.clone(),
+            record.city.clone(),
+            record.county.clone(),
+            record.region.clone(),
+            record.address.clone(),
+            record.room_no.clone(),
+            baseline_date_key(record.check_in, &record.check_in_text),
+            baseline_date_key(record.check_out, &record.check_out_text),
+        ]
+        .join("\u{1f}")
+    }
+
+    fn baseline_date_key(parsed: Option<chrono::NaiveDateTime>, raw: &str) -> String {
+        parsed
+            .map(|value| format!("dt:{}", value.format("%Y-%m-%dT%H:%M:%S")))
+            .unwrap_or_else(|| format!("raw:{}", raw.trim()))
     }
 }
 
