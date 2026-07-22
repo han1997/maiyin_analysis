@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 14
+- **Total Sessions**: 15
 - **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~473 | Active |
+| `journal-1.md` | ~506 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 15 | 2026-07-22 | 修复会话删除与 SQLite 清理 | `4d78fe9` | `main` |
 | 14 | 2026-07-22 | 优化多文件导入合并性能 | `f12a11b` | `main` |
 | 13 | 2026-07-22 | 优化历史筛选查询性能 | `5c5cf5c` | `main` |
 | 12 | 2026-07-22 | 修复启动白屏：v2→v3 数据库迁移改为清理重建 | `8eaad35` | `main` |

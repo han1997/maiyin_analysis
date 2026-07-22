@@ -471,3 +471,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: 修复会话删除与 SQLite 清理
+
+**Date**: 2026-07-22
+**Task**: 修复会话删除与 SQLite 清理
+**Branch**: `main`
+
+### Summary
+
+将会话删除移出 Tauri 主线程，完善 SQLite/WAL/FTS 清理与并发保护，最后会话删除后重建空库，并补充前端删除状态及相关规范。Rust、前端测试、Clippy、lint、build 与 diff 检查均通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4d78fe9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
