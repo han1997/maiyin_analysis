@@ -504,3 +504,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: 优化文件夹批量导入性能
+
+**Date**: 2026-07-23
+**Task**: 优化文件夹批量导入性能
+**Branch**: `main`
+
+### Summary
+
+完成 SQLite 批量保存与有界流水线、FTS v2 兼容索引、LZ4 JSON 载荷和 16 KiB 新库页大小优化；目标规模保存从 48.56 秒降至约 32.4 秒，Rust/Clippy/前端测试与构建全部通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d969bea` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
