@@ -372,3 +372,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: 修复启动白屏：v2→v3 数据库迁移改为清理重建
+
+**Date**: 2026-07-22
+**Task**: 修复启动白屏：v2→v3 数据库迁移改为清理重建
+**Branch**: `main`
+
+### Summary
+
+诊断出白屏根因是 v2→v3 SQLite 迁移在 45 万行历史库上持写锁阻塞 Tauri 主线程。按用户决定不做迁移，改为清理旧数据重建（复用 reset_legacy_database），删除 migrate_records_v2_to_v3 与 RECORDS_V3_COLUMNS，新增 v2 清理测试。同步更新 database-guidelines.md 与 tauri-contract.md 规范，把'结构变化优先清理而非回填'记为约定。cargo fmt/clippy/test 全绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8eaad35` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

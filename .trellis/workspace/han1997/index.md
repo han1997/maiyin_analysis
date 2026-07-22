@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
+- **Total Sessions**: 12
 - **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~374 | Active |
+| `journal-1.md` | ~407 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-07-22 | 修复启动白屏：v2→v3 数据库迁移改为清理重建 | `8eaad35` | `main` |
 | 11 | 2026-07-22 | 为导入记录增加结果筛选功能 | `e6360f1` | `main` |
 | 10 | 2026-07-22 | 修复筛选弹窗显示并增强人员核查详情对比 | `7748838`, `d4b57d9`, `089affd` | `main` |
 | 9 | 2026-07-22 | 简化分析参数并优化结果表交互 | `856fb75` | `main` |
