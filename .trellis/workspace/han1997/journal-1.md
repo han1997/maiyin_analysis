@@ -570,3 +570,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: 优化数据分析性能
+
+**Date**: 2026-07-23
+**Task**: 优化数据分析性能
+**Branch**: `main`
+
+### Summary
+
+优化 Rust 分析热路径，新增 records-only 加载与 analysis-only 原子替换；代表性核心分析提升 47.7%，12.85 万记录重新分析提升 55.5%，完整质量门通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `329023b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
