@@ -537,3 +537,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: 完成区域模糊多选筛选
+
+**Date**: 2026-07-23
+**Task**: 完成区域模糊多选筛选
+**Branch**: `main`
+
+### Summary
+
+实现入住旅馆及户籍省市县的模糊多选筛选，统一浏览器与 SQLite 查询语义，并补齐 UI 提示、筛选计数、跨层契约与前后端测试。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2b8d232` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
