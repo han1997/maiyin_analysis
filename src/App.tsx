@@ -15,6 +15,7 @@ import type {
   WorkspaceSnapshot,
 } from "./domain/types";
 import { initialRecordsQuery } from "./domain/types";
+import { splitFilterTerms } from "./lib/filter";
 import { formatDateTime, formatInteger, maskIdentity, maskPhone } from "./lib/format";
 
 type BusyAction = "boot" | "import" | "reanalyze" | "session" | "export" | "delete" | null;
@@ -31,6 +32,7 @@ const exportActions: Array<{ kind: ExportKind; label: string }> = [
   { kind: "raw_csv", label: "规范化原始 CSV" },
 ];
 const pageSizeOptions = [50, 100, 200] as const;
+const regionFilterPlaceholder = "例如：安徽，浙江";
 
 const initialQuery: PersonQuery = {
   search: "",
@@ -606,25 +608,25 @@ function App() {
                 ><Icon name="filter" size={16} /> 更多筛选{activeExtraFilterCount(filterDraft) > 0 && <span className="filter-count">{activeExtraFilterCount(filterDraft)}</span>}</button>
                 {filterMenuOpen && <div className="toolbar-popover filter-popover" id="filter-popover">
                   <section className="filter-group" aria-labelledby="hotel-filter-title">
-                    <div className="filter-group-heading"><strong id="hotel-filter-title">入住旅馆</strong><span>多个名称用逗号分隔，需全部命中</span></div>
+                    <div className="filter-group-heading"><strong id="hotel-filter-title">入住旅馆</strong><span>名称多项需全部命中；省市县支持模糊多选</span></div>
                     <label className="field filter-wide-field"><span>旅馆名称</span><input placeholder="例如：旅馆 A，旅馆 B" value={filterDraft.hotelSearch} onChange={(event) => setFilterDraft((current) => ({ ...current, hotelSearch: event.target.value }))} /></label>
                     <div className="filter-field-grid three">
-                      <Field label="旅馆省份" value={filterDraft.hotelProvince ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, hotelProvince: value }))} />
-                      <Field label="旅馆城市" value={filterDraft.hotelCity ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, hotelCity: value }))} />
-                      <Field label="旅馆县区" value={filterDraft.hotelCounty ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, hotelCounty: value }))} />
+                      <Field label="旅馆省份" value={filterDraft.hotelProvince ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => setFilterDraft((current) => ({ ...current, hotelProvince: value }))} />
+                      <Field label="旅馆城市" value={filterDraft.hotelCity ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => setFilterDraft((current) => ({ ...current, hotelCity: value }))} />
+                      <Field label="旅馆县区" value={filterDraft.hotelCounty ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => setFilterDraft((current) => ({ ...current, hotelCounty: value }))} />
                     </div>
                   </section>
                   <section className="filter-group" aria-labelledby="household-filter-title">
-                    <div className="filter-group-heading"><strong id="household-filter-title">人员户籍地</strong><span>包含条件与排除条件分别组合匹配</span></div>
+                    <div className="filter-group-heading"><strong id="household-filter-title">人员户籍地</strong><span>省市县支持模糊多选；包含字段间同时满足，排除任一命中即排除</span></div>
                     <div className="filter-subgroup"><span>包含户籍地</span><div className="filter-field-grid three">
-                      <Field label="省份" value={filterDraft.householdProvince ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, householdProvince: value }))} />
-                      <Field label="城市" value={filterDraft.householdCity ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, householdCity: value }))} />
-                      <Field label="县区" value={filterDraft.householdCounty ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, householdCounty: value }))} />
+                      <Field label="省份" value={filterDraft.householdProvince ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => setFilterDraft((current) => ({ ...current, householdProvince: value }))} />
+                      <Field label="城市" value={filterDraft.householdCity ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => setFilterDraft((current) => ({ ...current, householdCity: value }))} />
+                      <Field label="县区" value={filterDraft.householdCounty ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => setFilterDraft((current) => ({ ...current, householdCounty: value }))} />
                     </div></div>
                     <div className="filter-subgroup"><span>排除户籍地</span><div className="filter-field-grid three">
-                      <Field label="省份" value={filterDraft.excludeHouseholdProvince ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, excludeHouseholdProvince: value }))} />
-                      <Field label="城市" value={filterDraft.excludeHouseholdCity ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, excludeHouseholdCity: value }))} />
-                      <Field label="县区" value={filterDraft.excludeHouseholdCounty ?? ""} onChange={(value) => setFilterDraft((current) => ({ ...current, excludeHouseholdCounty: value }))} />
+                      <Field label="省份" value={filterDraft.excludeHouseholdProvince ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => setFilterDraft((current) => ({ ...current, excludeHouseholdProvince: value }))} />
+                      <Field label="城市" value={filterDraft.excludeHouseholdCity ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => setFilterDraft((current) => ({ ...current, excludeHouseholdCity: value }))} />
+                      <Field label="县区" value={filterDraft.excludeHouseholdCounty ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => setFilterDraft((current) => ({ ...current, excludeHouseholdCounty: value }))} />
                     </div></div>
                   </section>
                   <section className="filter-group" aria-labelledby="person-filter-title">
@@ -816,25 +818,25 @@ function ImportedRecordsTable({
           ><Icon name="filter" size={16} /> 更多筛选{activeFilterCount > 0 && <span className="filter-count">{activeFilterCount}</span>}</button>
           {filterMenuOpen && <div className="toolbar-popover filter-popover" id="records-filter-popover">
             <section className="filter-group" aria-labelledby="records-hotel-filter-title">
-              <div className="filter-group-heading"><strong id="records-hotel-filter-title">入住旅馆</strong><span>多个名称用逗号分隔，需全部命中</span></div>
+              <div className="filter-group-heading"><strong id="records-hotel-filter-title">入住旅馆</strong><span>名称多项需全部命中；省市县支持模糊多选</span></div>
               <label className="field filter-wide-field"><span>旅馆名称</span><input placeholder="例如：旅馆 A，旅馆 B" value={filterDraft.hotelSearch ?? ""} onChange={(event) => onFilterDraftChange((current) => ({ ...current, hotelSearch: event.target.value }))} /></label>
               <div className="filter-field-grid three">
-                <Field label="旅馆省份" value={filterDraft.hotelProvince ?? ""} onChange={(value) => onFilterDraftChange((current) => ({ ...current, hotelProvince: value }))} />
-                <Field label="旅馆城市" value={filterDraft.hotelCity ?? ""} onChange={(value) => onFilterDraftChange((current) => ({ ...current, hotelCity: value }))} />
-                <Field label="旅馆县区" value={filterDraft.hotelCounty ?? ""} onChange={(value) => onFilterDraftChange((current) => ({ ...current, hotelCounty: value }))} />
+                <Field label="旅馆省份" value={filterDraft.hotelProvince ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, hotelProvince: value }))} />
+                <Field label="旅馆城市" value={filterDraft.hotelCity ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, hotelCity: value }))} />
+                <Field label="旅馆县区" value={filterDraft.hotelCounty ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, hotelCounty: value }))} />
               </div>
             </section>
             <section className="filter-group" aria-labelledby="records-household-filter-title">
-              <div className="filter-group-heading"><strong id="records-household-filter-title">人员户籍地</strong><span>包含条件与排除条件分别组合匹配</span></div>
+              <div className="filter-group-heading"><strong id="records-household-filter-title">人员户籍地</strong><span>省市县支持模糊多选；包含字段间同时满足，排除任一命中即排除</span></div>
               <div className="filter-subgroup"><span>包含户籍地</span><div className="filter-field-grid three">
-                <Field label="省份" value={filterDraft.householdProvince ?? ""} onChange={(value) => onFilterDraftChange((current) => ({ ...current, householdProvince: value }))} />
-                <Field label="城市" value={filterDraft.householdCity ?? ""} onChange={(value) => onFilterDraftChange((current) => ({ ...current, householdCity: value }))} />
-                <Field label="县区" value={filterDraft.householdCounty ?? ""} onChange={(value) => onFilterDraftChange((current) => ({ ...current, householdCounty: value }))} />
+                <Field label="省份" value={filterDraft.householdProvince ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, householdProvince: value }))} />
+                <Field label="城市" value={filterDraft.householdCity ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, householdCity: value }))} />
+                <Field label="县区" value={filterDraft.householdCounty ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, householdCounty: value }))} />
               </div></div>
               <div className="filter-subgroup"><span>排除户籍地</span><div className="filter-field-grid three">
-                <Field label="省份" value={filterDraft.excludeHouseholdProvince ?? ""} onChange={(value) => onFilterDraftChange((current) => ({ ...current, excludeHouseholdProvince: value }))} />
-                <Field label="城市" value={filterDraft.excludeHouseholdCity ?? ""} onChange={(value) => onFilterDraftChange((current) => ({ ...current, excludeHouseholdCity: value }))} />
-                <Field label="县区" value={filterDraft.excludeHouseholdCounty ?? ""} onChange={(value) => onFilterDraftChange((current) => ({ ...current, excludeHouseholdCounty: value }))} />
+                <Field label="省份" value={filterDraft.excludeHouseholdProvince ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, excludeHouseholdProvince: value }))} />
+                <Field label="城市" value={filterDraft.excludeHouseholdCity ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, excludeHouseholdCity: value }))} />
+                <Field label="县区" value={filterDraft.excludeHouseholdCounty ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, excludeHouseholdCounty: value }))} />
               </div></div>
             </section>
             <section className="filter-group" aria-labelledby="records-person-filter-title">
@@ -1067,22 +1069,27 @@ function analysisTimeScopeLabel(settings: AnalysisSettings): string {
 }
 
 function activeExtraFilterCount(query: PersonQuery): number {
-  const hasAny = (values: Array<string | undefined>) => values.some((value) => Boolean(value?.trim()));
-  return Number(Boolean(query.hotelSearch?.trim()))
-    + Number(hasAny([query.hotelProvince, query.hotelCity, query.hotelCounty]))
-    + Number(hasAny([query.householdProvince, query.householdCity, query.householdCounty]))
-    + Number(hasAny([query.excludeHouseholdProvince, query.excludeHouseholdCity, query.excludeHouseholdCounty]))
+  return Number(splitFilterTerms(query.hotelSearch ?? "").length > 0)
+    + activeDelimitedFieldCount([query.hotelProvince, query.hotelCity, query.hotelCounty])
+    + activeDelimitedFieldCount([query.householdProvince, query.householdCity, query.householdCounty])
+    + activeDelimitedFieldCount([query.excludeHouseholdProvince, query.excludeHouseholdCity, query.excludeHouseholdCounty])
     + Number(query.minAge != null || query.maxAge != null || Boolean(query.gender))
     + Number((query.alertState ?? "全部人员") !== "全部人员");
 }
 
 function activeRecordsFilterCount(query: ImportedRecordsQuery): number {
-  const hasAny = (values: Array<string | undefined>) => values.some((value) => Boolean(value?.trim()));
-  return Number(Boolean(query.hotelSearch?.trim()))
-    + Number(hasAny([query.hotelProvince, query.hotelCity, query.hotelCounty]))
-    + Number(hasAny([query.householdProvince, query.householdCity, query.householdCounty]))
-    + Number(hasAny([query.excludeHouseholdProvince, query.excludeHouseholdCity, query.excludeHouseholdCounty]))
+  return Number(splitFilterTerms(query.hotelSearch ?? "").length > 0)
+    + activeDelimitedFieldCount([query.hotelProvince, query.hotelCity, query.hotelCounty])
+    + activeDelimitedFieldCount([query.householdProvince, query.householdCity, query.householdCounty])
+    + activeDelimitedFieldCount([query.excludeHouseholdProvince, query.excludeHouseholdCity, query.excludeHouseholdCounty])
     + Number(query.minAge != null || query.maxAge != null || Boolean(query.gender));
+}
+
+function activeDelimitedFieldCount(values: Array<string | undefined>): number {
+  return values.reduce(
+    (count, value) => count + Number(splitFilterTerms(value ?? "").length > 0),
+    0,
+  );
 }
 
 function errorMessage(error: unknown): string {

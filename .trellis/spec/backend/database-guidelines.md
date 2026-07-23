@@ -58,16 +58,21 @@ owns schema compatibility.
   source-table `rowid` before deleting the corresponding source rows. The old tables'
   UNINDEXED `session_id` is not a reliable read/delete predicate, so
   `DELETE FROM <fts> WHERE session_id = ?` can silently leave documents behind.
-- Hotel and household jurisdiction filters use normalized split columns with prefix
-  range semantics (`column >= x AND column < x || max_unicode`) so B-tree indexes can
-  serve them reliably. Do not reintroduce
-  `household_region_norm LIKE '%x%'`, `search_text LIKE '%x%'` for long queries, or
-  OR conditions against concatenated region text on ordinary paginated paths.
+- Hotel and household jurisdiction filters use normalized split columns. Each input
+  field is split on English/Chinese commas, enumeration commas, English/Chinese
+  semicolons, LF, or CR; empty and duplicate normalized terms are discarded. Terms
+  within one field use parameterized substring `LIKE` predicates joined by `OR`, while
+  populated province/city/county fields use `AND`. Person hotel components stay inside
+  one correlated `person_hotel_regions` row. Existing B-tree indexes still bound work
+  to the session/person partition, but arbitrary substring confirmation itself is not
+  sargable; never substitute concatenated region text or decode JSON on paginated paths.
 - `record_filter_counts` stores per-session counts for non-empty, non-null-check-in
   imported records by `filter_kind` and normalized value. It may answer exact totals
   only for safe single-field imported-record filters without selected time windows or
-  other narrowing filters; all combined filters fall back to normal SQLite `COUNT(*)`.
-  Replacing a session must replace these counts in the same save transaction.
+  other narrowing filters. A single fuzzy multi-value region field may sum grouped
+  values through one `OR` substring predicate; a grouped value is counted once even
+  when multiple candidates overlap. All combined filters fall back to normal SQLite
+  `COUNT(*)`. Replacing a session must replace these counts in the same save transaction.
 - Saves use one SQLite transaction. JSON/normalization preparation is split into 4,096-row
   Rayon chunks and overlaps the current SQLite write through a capacity-one bounded
   channel. Multi-row INSERT statements stay at or below 900 bound variables; FTS is
@@ -147,10 +152,13 @@ owns schema compatibility.
 - Good: `A，B` creates two correlated hotel `EXISTS` clauses and requires both.
 - Good: `query.search = "祁门县"` uses FTS5 trigram and joins back by SQLite `rowid`;
   `query.search = "祁"` uses the short-query `LIKE` fallback.
-- Good: `householdProvince = "安徽"` matches `安徽省`; `householdProvince = "省"` does
-  not match under prefix semantics.
-- Good: a single `ImportedRecordsQuery.householdProvince = "安徽"` can get `total`
-  from `record_filter_counts`, then fetch rows from `records` ordered by `check_in, uid`.
+- Good: `householdProvince = "浙江，徽 省"` matches `安徽省`; whitespace is removed,
+  matching is case-insensitive, and candidates within the field use OR.
+- Good: a single `ImportedRecordsQuery.householdProvince = "浙江,徽省"` can get the
+  exact `total` from `record_filter_counts`, then fetch matching rows from `records`
+  ordered by `check_in, uid`.
+- Good: `hotelProvince = "安徽"` plus `hotelCounty = "西湖"` does not match one person
+  when those components occur only in different `person_hotel_regions` rows.
 - Good: deleting the only visible 1.6 GB session replaces the database file instead of
   writing hundreds of thousands of cascade tombstones; the next import saves normally.
 - Good: a new large-session save pipelines bounded preparation with multi-row INSERT,
@@ -172,6 +180,10 @@ owns schema compatibility.
   value and can diverge from `records.rowid` or collide across sessions.
 - Bad: using `record_filter_counts` for combined filters such as province + age, selected
   time windows, or exclude-household filters; those need exact row-level predicates.
+- Bad: keeping the old prefix range predicate for jurisdiction fields; inputs such as
+  `徽省` must match `安徽省` under the normalized arbitrary-substring contract.
+- Bad: testing province/city/county against one concatenated region string or against
+  separate child rows, because that loses field boundaries and same-stay correctness.
 - Bad: writing a v1/v2/v3→v5 backfill that scans every `record_json` row inside one startup
   transaction, because it blocks the Tauri main thread for a 453k-row history and white
   screens; clear the database instead.
@@ -190,8 +202,9 @@ owns schema compatibility.
   JSON TEXT rows remain readable.
 - Assert a newly created database uses 16 KiB pages; do not require existing v4 files
   to change page size.
-- Assert person count, page size, stable ordering, multi-hotel AND fuzzy matching, and
-  same-row jurisdiction matching.
+- Assert person count, page size, stable ordering, multi-hotel AND fuzzy matching,
+  normalized jurisdiction substring matching, per-field multi-value OR, cross-field
+  AND, separator/dedup behavior, and same-row hotel jurisdiction matching.
 - Assert imported-record total, `1..=500` page-size clamping, stable
   `check_in ASC, uid ASC` ordering, time boundaries, and missing-check-in exclusion.
 - Set a populated database to `user_version = 1`, reopen it, and assert history is empty
@@ -202,8 +215,9 @@ owns schema compatibility.
   empty and `user_version = 5`.
 - Set a populated database to `user_version = 4`, reopen it, and assert rows/search
   remain available while `user_version = 5` and the compact v2 FTS tables exist.
-- Assert imported-record result filters (hotel name, hotel jurisdiction, household
-  include/exclude, age range, gender, keyword search) are applied in SQLite.
+- Assert imported-record result filters (hotel name, fuzzy multi-value hotel
+  jurisdiction, fuzzy multi-value household include/exclude, age range, gender,
+  keyword search) are applied in SQLite and that page rows agree with `total`.
 - Assert household include/exclude, age, gender, risk, alert-state, and search behavior.
 - Assert FTS search works when a record's business `uid` does not equal its SQLite
   rowid.
@@ -280,3 +294,21 @@ transaction.execute(
 
 The bounded form overlaps CPU preparation with SQLite work, caps live payload memory,
 and preserves one-transaction rollback semantics.
+
+#### Wrong: prefix-only or concatenated jurisdiction matching
+
+```sql
+hotel_province_norm >= ? AND hotel_province_norm < ?
+-- or: region_norm LIKE '%安徽%黄山%祁门%'
+```
+
+#### Correct: parameterized per-field OR groups combined with AND
+
+```sql
+(hotel_province_norm LIKE ? ESCAPE '\' OR hotel_province_norm LIKE ? ESCAPE '\')
+AND (hotel_city_norm LIKE ? ESCAPE '\')
+AND (hotel_county_norm LIKE ? ESCAPE '\')
+```
+
+Bind normalized `%term%` patterns. For people queries, place the three groups inside
+one correlated `person_hotel_regions` `EXISTS` so components cannot cross stays.

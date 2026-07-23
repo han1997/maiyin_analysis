@@ -25,6 +25,11 @@ The analysis workspace is a dense desktop tool. Keep the primary path visible an
 - Put hotel search, alert-state filtering, and other secondary criteria in a labelled `details` disclosure or equivalent accessible control.
 - Treat hotel jurisdiction, household include/exclude, age, and gender as result filters. They belong to `PersonQuery`, not `AnalysisSettings`, and must never trigger risk reanalysis.
 - Multiple hotel-name terms use a familiar separated text input; explain the AND behavior beside the field instead of introducing a custom selector.
+- Province/city/county result filters remain text inputs and use the shared delimiter
+  parser for fuzzy multi-value terms. UI copy must explain that region values support
+  fuzzy multi-select while hotel-name terms retain their separate AND behavior.
+- The secondary-filter badge counts populated region fields after parsing, not raw
+  non-whitespace strings; delimiter-only inputs do not count as active filters.
 - Applied result filters call `AppApi.queryPeople` and replace one `PersonPage`; they never require a full people collection in `WorkspaceSnapshot`.
 - Show a count on the secondary-filter trigger when non-default criteria are active.
 - Keep analysis settings editable in `SettingsPanel`; the sidebar may show a read-only summary and a single entry point.
@@ -56,6 +61,9 @@ The analysis workspace is a dense desktop tool. Keep the primary path visible an
   and `aria-expanded` state.
 - Existing workspace smoke tests must continue to assert that the table and person-detail entry points render.
 - SQLite query tests cover multi-hotel AND matching, same-stay jurisdiction matching, and person filters. Frontend tests cover age validation, asynchronous page rendering, and the absence of result filters from `SettingsPanel`.
+- Region-filter frontend tests cover all supported separators, normalized substring
+  matching, per-field OR, cross-field AND, household exclusion, browser imported-record
+  totals, explanatory placeholders, and active-field badge counts.
 
 ---
 

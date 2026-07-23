@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { PersonSummary } from "../domain/types";
-import { filterPeople } from "./filter";
+import {
+  filterPeople,
+  recordMatchesImportedFilter,
+  splitFilterTerms,
+  type ImportedRecordFilterFields,
+} from "./filter";
 
 const person: PersonSummary = {
   personKey: "1",
@@ -8,6 +13,9 @@ const person: PersonSummary = {
   idNo: "341024198809128135",
   phone: "13905591234",
   householdRegion: "安徽省 黄山市 祁门县",
+  householdProvince: "安徽省",
+  householdCity: "黄山市",
+  householdCounty: "祁门县",
   age: 37,
   gender: "男",
   totalRecords: 9,
@@ -27,6 +35,20 @@ const person: PersonSummary = {
 };
 
 describe("filterPeople", () => {
+  it("normalizes all supported separators, whitespace, case and duplicate terms", () => {
+    expect(splitFilterTerms(" 安徽,浙 江，江苏、四川;重庆；北京\n天津\r上海；安 徽 ")).toEqual([
+      "安徽",
+      "浙江",
+      "江苏",
+      "四川",
+      "重庆",
+      "北京",
+      "天津",
+      "上海",
+    ]);
+    expect(splitFilterTerms("An Hui, an hui")).toEqual(["anhui"]);
+  });
+
   it("searches identity, household region and alert text", () => {
     for (const search of ["341024", "祁门县", "时间重合"]) {
       const page = filterPeople([person], {
@@ -99,16 +121,16 @@ describe("filterPeople", () => {
     ).toBe(0);
   });
 
-  it("filters hotel region, household region and person attributes after analysis", () => {
+  it("uses fuzzy multi-value OR within region fields and AND across fields", () => {
     expect(
       filterPeople([person], {
         search: "",
-        hotelProvince: "安徽",
-        hotelCity: "黄山",
-        hotelCounty: "祁门",
-        householdProvince: "安徽",
-        householdCounty: "祁门",
-        excludeHouseholdCounty: "休宁",
+        hotelProvince: "江苏，徽 省",
+        hotelCity: "南京；山 市",
+        hotelCounty: "西湖\n门 县",
+        householdProvince: "浙江，徽 省",
+        householdCounty: "休宁、门 县",
+        excludeHouseholdCounty: "西湖；休宁",
         minAge: 30,
         maxAge: 40,
         gender: "男",
@@ -122,6 +144,17 @@ describe("filterPeople", () => {
     expect(
       filterPeople([person], {
         search: "",
+        excludeHouseholdProvince: "浙江；徽省",
+        level: "全部等级",
+        alertState: "全部人员",
+        page: 1,
+        pageSize: 50,
+      }).total,
+    ).toBe(0);
+
+    expect(
+      filterPeople([person], {
+        search: "",
         hotelProvince: "安徽",
         hotelCounty: "西湖",
         level: "全部等级",
@@ -130,6 +163,43 @@ describe("filterPeople", () => {
         pageSize: 50,
       }).total,
     ).toBe(0);
+  });
+
+  it("applies the same fuzzy multi-value semantics to imported records", () => {
+    const record: ImportedRecordFilterFields = {
+      name: "周明远",
+      idNo: "341024198809128135",
+      phone: "13905591234",
+      hotelName: "阊江商务酒店",
+      hotelProvince: "安徽省",
+      hotelCity: "黄山市",
+      hotelCounty: "祁门县",
+      hotelRegion: "安徽省 黄山市 祁门县",
+      householdRegion: "安徽省 黄山市 祁门县",
+      householdProvince: "安徽省",
+      householdCity: "黄山市",
+      householdCounty: "祁门县",
+      age: 37,
+      gender: "男",
+    };
+
+    expect(recordMatchesImportedFilter(record, {
+      search: "",
+      hotelProvince: "浙江,徽省",
+      hotelCity: "杭州、山市",
+      householdProvince: "江苏;徽省",
+      householdCounty: "西湖\n门县",
+      excludeHouseholdCity: "成都；上海",
+      page: 1,
+      pageSize: 50,
+    })).toBe(true);
+
+    expect(recordMatchesImportedFilter(record, {
+      search: "",
+      excludeHouseholdCounty: "西湖,门县",
+      page: 1,
+      pageSize: 50,
+    })).toBe(false);
   });
 
   it("excludes unknown ages when an age boundary is active", () => {

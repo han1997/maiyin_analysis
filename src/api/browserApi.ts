@@ -62,6 +62,9 @@ function demoImportedRecord(index: number): DemoImportedRecord {
     hotelCity: "黄山市",
     hotelCounty: index % 2 === 0 ? "祁门县" : "黟县",
     hotelRegion: "安徽省 黄山市 祁门县",
+    householdProvince: "安徽省",
+    householdCity: "黄山市",
+    householdCounty: "祁门县",
     age: 25 + (index % 40),
     gender: index % 2 === 0 ? "男" : "女",
   };
@@ -77,8 +80,27 @@ function allDemoImportedRecords(): DemoImportedRecord[] {
 }
 
 function toImportedStayRecord(record: DemoImportedRecord): ImportedStayRecord {
-  const { hotelProvince, hotelCity, hotelCounty, hotelRegion, age, gender, ...rest } = record;
-  void hotelProvince; void hotelCity; void hotelCounty; void hotelRegion; void age; void gender;
+  const {
+    hotelProvince,
+    hotelCity,
+    hotelCounty,
+    hotelRegion,
+    householdProvince,
+    householdCity,
+    householdCounty,
+    age,
+    gender,
+    ...rest
+  } = record;
+  void hotelProvince;
+  void hotelCity;
+  void hotelCounty;
+  void hotelRegion;
+  void householdProvince;
+  void householdCity;
+  void householdCounty;
+  void age;
+  void gender;
   return rest;
 }
 

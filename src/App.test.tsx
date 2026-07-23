@@ -37,8 +37,17 @@ describe("App", () => {
     expect(filterTrigger.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("预警状态")).toBeTruthy();
     expect(screen.getByPlaceholderText("例如：旅馆 A，旅馆 B")).toBeTruthy();
+    expect(screen.getAllByPlaceholderText("例如：安徽，浙江")).toHaveLength(9);
+    expect(screen.getByText("名称多项需全部命中；省市县支持模糊多选")).toBeTruthy();
     expect(screen.getByText("包含户籍地")).toBeTruthy();
     expect(screen.getByText("最小年龄")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("旅馆省份"), { target: { value: "，；\n" } });
+    expect(filterTrigger.querySelector(".filter-count")).toBeNull();
+    fireEvent.change(screen.getByLabelText("旅馆省份"), { target: { value: "安徽，浙江" } });
+    expect(filterTrigger.querySelector(".filter-count")?.textContent).toBe("1");
+    fireEvent.change(screen.getByLabelText("旅馆城市"), { target: { value: "黄山，杭州" } });
+    expect(filterTrigger.querySelector(".filter-count")?.textContent).toBe("2");
 
     fireEvent.click(screen.getByRole("button", { name: "导出" }));
     expect(filterTrigger.getAttribute("aria-expanded")).toBe("false");
@@ -83,7 +92,15 @@ describe("App", () => {
     fireEvent.click(filterTrigger);
     expect(filterTrigger.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("人员条件")).toBeTruthy();
+    expect(screen.getAllByPlaceholderText("例如：安徽，浙江")).toHaveLength(9);
     expect(screen.queryByText("预警状态")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("旅馆省份"), { target: { value: "、；\r" } });
+    expect(filterTrigger.querySelector(".filter-count")).toBeNull();
+    fireEvent.change(screen.getByLabelText("旅馆省份"), { target: { value: "安徽,浙江" } });
+    expect(filterTrigger.querySelector(".filter-count")?.textContent).toBe("1");
+    fireEvent.change(screen.getByLabelText("旅馆城市"), { target: { value: "黄山,杭州" } });
+    expect(filterTrigger.querySelector(".filter-count")?.textContent).toBe("2");
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(filterTrigger.getAttribute("aria-expanded")).toBe("false");
@@ -111,6 +128,21 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /更多筛选/ }));
     fireEvent.click(screen.getByRole("button", { name: "清除全部筛选" }));
     expect(await screen.findByText(/共 1,274 条/)).toBeTruthy();
+  });
+
+  it("applies fuzzy multi-value region filters to browser imported records", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "7月上旬旅馆数据" }, { timeout: 2_000 });
+
+    fireEvent.click(screen.getByRole("tab", { name: /导入记录/ }));
+    await screen.findByText("演示人员001");
+    fireEvent.click(screen.getByRole("button", { name: /更多筛选/ }));
+    fireEvent.change(screen.getByLabelText("旅馆省份"), { target: { value: "浙江，徽 省" } });
+    fireEvent.change(screen.getByLabelText("旅馆县区"), { target: { value: "西湖；门 县" } });
+    fireEvent.click(screen.getByRole("button", { name: "应用筛选" }));
+
+    expect(await screen.findByText(/共 637 条/)).toBeTruthy();
+    expect(screen.getByText(/第 1 \/ 13 页/)).toBeTruthy();
   });
 
   it("rejects an inverted records age range without applying it", async () => {

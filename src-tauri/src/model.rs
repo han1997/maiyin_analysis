@@ -246,12 +246,15 @@ impl From<Record> for ImportedStayRecord {
 pub struct ImportedRecordsQuery {
     pub search: String,
     pub hotel_search: String,
+    /// Region inputs accept delimited fuzzy terms; terms within one field use OR.
     pub hotel_province: String,
     pub hotel_city: String,
     pub hotel_county: String,
+    /// Household include fields combine with AND after per-field OR matching.
     pub household_province: String,
     pub household_city: String,
     pub household_county: String,
+    /// Any matching household exclusion term excludes the result.
     pub exclude_household_province: String,
     pub exclude_household_city: String,
     pub exclude_household_county: String,
@@ -331,12 +334,15 @@ pub struct WorkspaceSnapshot {
 pub struct PersonQuery {
     pub search: String,
     pub hotel_search: String,
+    /// Region inputs accept delimited fuzzy terms; terms within one field use OR.
     pub hotel_province: String,
     pub hotel_city: String,
     pub hotel_county: String,
+    /// Household include fields combine with AND after per-field OR matching.
     pub household_province: String,
     pub household_city: String,
     pub household_county: String,
+    /// Any matching household exclusion term excludes the result.
     pub exclude_household_province: String,
     pub exclude_household_city: String,
     pub exclude_household_county: String,
@@ -420,5 +426,56 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(settings.frequency_mode, FrequencyMode::Selected);
+    }
+
+    #[test]
+    fn query_contracts_default_missing_region_filters_for_older_callers() {
+        let people: PersonQuery = serde_json::from_value(serde_json::json!({
+            "search": "",
+            "level": "全部等级",
+            "alertState": "全部人员",
+            "page": 1,
+            "pageSize": 50
+        }))
+        .unwrap();
+        assert!(people.hotel_province.is_empty());
+        assert!(people.household_city.is_empty());
+        assert!(people.exclude_household_county.is_empty());
+
+        let records: ImportedRecordsQuery = serde_json::from_value(serde_json::json!({
+            "search": "",
+            "page": 1,
+            "pageSize": 50
+        }))
+        .unwrap();
+        assert!(records.hotel_county.is_empty());
+        assert!(records.household_province.is_empty());
+        assert!(records.exclude_household_city.is_empty());
+    }
+
+    #[test]
+    fn legacy_person_summary_defaults_structured_household_fields() {
+        let summary: PersonSummary = serde_json::from_value(serde_json::json!({
+            "personKey": "id:1",
+            "name": "测试人员",
+            "idNo": "341024198809128135",
+            "phone": "13905591234",
+            "householdRegion": "安徽省 黄山市 祁门县",
+            "age": 37,
+            "gender": "男",
+            "totalRecords": 1,
+            "maxMonthCount": 1,
+            "maxYearCount": 1,
+            "overlapDays": 0,
+            "sequentialDays": 0,
+            "score": 0,
+            "level": "正常",
+            "alertCount": 0,
+            "alertTitles": []
+        }))
+        .unwrap();
+        assert!(summary.household_province.is_empty());
+        assert!(summary.household_city.is_empty());
+        assert!(summary.household_county.is_empty());
     }
 }

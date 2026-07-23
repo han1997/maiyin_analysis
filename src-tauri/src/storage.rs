@@ -1199,26 +1199,18 @@ fn build_person_filter(session_id: &str, query: &PersonQuery) -> (String, Vec<Va
     }
 
     let hotel_regions = [
-        normalize(&query.hotel_province),
-        normalize(&query.hotel_city),
-        normalize(&query.hotel_county),
+        (
+            "phr.province_norm",
+            split_filter_terms(&query.hotel_province),
+        ),
+        ("phr.city_norm", split_filter_terms(&query.hotel_city)),
+        ("phr.county_norm", split_filter_terms(&query.hotel_county)),
     ];
-    if hotel_regions.iter().any(|value| !value.is_empty()) {
-        let mut region_clauses = Vec::new();
-        for (column, value) in ["province_norm", "city_norm", "county_norm"]
-            .into_iter()
-            .zip(hotel_regions)
-        {
-            if value.is_empty() {
-                continue;
-            }
-            // Prefix match on B-tree-indexable split column; sargable via
-            // the person_hotel_regions composite PRIMARY KEY index.
-            region_clauses.push(format!("phr.{column} >= ? AND phr.{column} < ?"));
-            let (lower, upper) = prefix_range(&value);
-            values.push(Value::Text(lower));
-            values.push(Value::Text(upper));
-        }
+    let region_clauses = hotel_regions
+        .iter()
+        .filter_map(|(column, terms)| contains_any_clause(column, terms, &mut values))
+        .collect::<Vec<_>>();
+    if !region_clauses.is_empty() {
         clauses.push(format!(
             "EXISTS (SELECT 1 FROM person_hotel_regions phr \
              WHERE phr.session_id = p.session_id AND phr.person_key = p.person_key AND {})",
@@ -1226,55 +1218,46 @@ fn build_person_filter(session_id: &str, query: &PersonQuery) -> (String, Vec<Va
         ));
     }
 
-    // Household-prefix filters: indexable via idx_people_household_split.
+    // Household include filters use OR within one split field and AND across fields.
     let household_splits = [
         (
-            "household_province_norm",
-            normalize(&query.household_province),
+            "p.household_province_norm",
+            split_filter_terms(&query.household_province),
         ),
-        ("household_city_norm", normalize(&query.household_city)),
-        ("household_county_norm", normalize(&query.household_county)),
+        (
+            "p.household_city_norm",
+            split_filter_terms(&query.household_city),
+        ),
+        (
+            "p.household_county_norm",
+            split_filter_terms(&query.household_county),
+        ),
     ];
-    for (column, value) in household_splits {
-        if !value.is_empty() {
-            clauses.push(format!("p.{column} >= ? AND p.{column} < ?"));
-            let (lower, upper) = prefix_range(&value);
-            values.push(Value::Text(lower));
-            values.push(Value::Text(upper));
+    for (column, terms) in household_splits {
+        if let Some(clause) = contains_any_clause(column, &terms, &mut values) {
+            clauses.push(clause);
         }
     }
     let excluded = [
         (
-            "household_province_norm",
-            normalize(&query.exclude_household_province),
+            "p.household_province_norm",
+            split_filter_terms(&query.exclude_household_province),
         ),
         (
-            "household_city_norm",
-            normalize(&query.exclude_household_city),
+            "p.household_city_norm",
+            split_filter_terms(&query.exclude_household_city),
         ),
         (
-            "household_county_norm",
-            normalize(&query.exclude_household_county),
+            "p.household_county_norm",
+            split_filter_terms(&query.exclude_household_county),
         ),
-    ]
-    .into_iter()
-    .filter(|(_, value)| !value.is_empty())
-    .collect::<Vec<_>>();
-    if !excluded.is_empty() {
-        // NOT over the prefix-match set; each populated component is an OR (any excluded
-        // sub-string prefix triggers exclusion). Subsumes the prior substring semantic
-        // for the common case where users type leading region characters.
-        let inner = excluded
-            .iter()
-            .map(|(column, _)| format!("p.{column} >= ? AND p.{column} < ?"))
-            .collect::<Vec<_>>()
-            .join(" OR ");
-        clauses.push(format!("NOT ({inner})"));
-        for (_, value) in excluded {
-            let (lower, upper) = prefix_range(&value);
-            values.push(Value::Text(lower));
-            values.push(Value::Text(upper));
-        }
+    ];
+    let excluded_clauses = excluded
+        .iter()
+        .filter_map(|(column, terms)| contains_any_clause(column, terms, &mut values))
+        .collect::<Vec<_>>();
+    if !excluded_clauses.is_empty() {
+        clauses.push(format!("NOT ({})", excluded_clauses.join(" OR ")));
     }
     (clauses.join(" AND "), values)
 }
@@ -1344,87 +1327,80 @@ fn build_records_filter(
         values.push(Value::Text(fuzzy_pattern(&hotel)));
     }
 
-    // Hotel jurisdiction prefix via idx_records_hotel_region (multi-column B-tree).
-    for (column, value) in [
-        ("hotel_province_norm", normalize(&query.hotel_province)),
-        ("hotel_city_norm", normalize(&query.hotel_city)),
-        ("hotel_county_norm", normalize(&query.hotel_county)),
+    // Hotel jurisdiction uses OR within one split field and AND across fields.
+    for (column, terms) in [
+        (
+            "hotel_province_norm",
+            split_filter_terms(&query.hotel_province),
+        ),
+        ("hotel_city_norm", split_filter_terms(&query.hotel_city)),
+        ("hotel_county_norm", split_filter_terms(&query.hotel_county)),
     ] {
-        if value.is_empty() {
-            continue;
+        if let Some(clause) = contains_any_clause(column, &terms, &mut values) {
+            clauses.push(clause);
         }
-        clauses.push(format!("{column} >= ? AND {column} < ?"));
-        let (lower, upper) = prefix_range(&value);
-        values.push(Value::Text(lower));
-        values.push(Value::Text(upper));
     }
 
-    // Household jurisdiction prefix via idx_records_household_split.
+    // Household include filters use the same split-field semantics as people queries.
     let household_splits = [
         (
             "household_province_norm",
-            normalize(&query.household_province),
+            split_filter_terms(&query.household_province),
         ),
-        ("household_city_norm", normalize(&query.household_city)),
-        ("household_county_norm", normalize(&query.household_county)),
+        (
+            "household_city_norm",
+            split_filter_terms(&query.household_city),
+        ),
+        (
+            "household_county_norm",
+            split_filter_terms(&query.household_county),
+        ),
     ];
-    for (column, value) in household_splits {
-        if !value.is_empty() {
-            clauses.push(format!("{column} >= ? AND {column} < ?"));
-            let (lower, upper) = prefix_range(&value);
-            values.push(Value::Text(lower));
-            values.push(Value::Text(upper));
+    for (column, terms) in household_splits {
+        if let Some(clause) = contains_any_clause(column, &terms, &mut values) {
+            clauses.push(clause);
         }
     }
     let excluded = [
         (
             "household_province_norm",
-            normalize(&query.exclude_household_province),
+            split_filter_terms(&query.exclude_household_province),
         ),
         (
             "household_city_norm",
-            normalize(&query.exclude_household_city),
+            split_filter_terms(&query.exclude_household_city),
         ),
         (
             "household_county_norm",
-            normalize(&query.exclude_household_county),
+            split_filter_terms(&query.exclude_household_county),
         ),
-    ]
-    .into_iter()
-    .filter(|(_, value)| !value.is_empty())
-    .collect::<Vec<_>>();
-    if !excluded.is_empty() {
-        let inner = excluded
-            .iter()
-            .map(|(column, _)| format!("{column} >= ? AND {column} < ?"))
-            .collect::<Vec<_>>()
-            .join(" OR ");
-        clauses.push(format!("NOT ({inner})"));
-        for (_, value) in excluded {
-            let (lower, upper) = prefix_range(&value);
-            values.push(Value::Text(lower));
-            values.push(Value::Text(upper));
-        }
+    ];
+    let excluded_clauses = excluded
+        .iter()
+        .filter_map(|(column, terms)| contains_any_clause(column, terms, &mut values))
+        .collect::<Vec<_>>();
+    if !excluded_clauses.is_empty() {
+        clauses.push(format!("NOT ({})", excluded_clauses.join(" OR ")));
     }
 
     (clauses.join(" AND "), values)
 }
 
 fn records_count_source(query: &ImportedRecordsQuery) -> &'static str {
-    if !query.hotel_province.trim().is_empty()
-        || !query.hotel_city.trim().is_empty()
-        || !query.hotel_county.trim().is_empty()
+    if has_filter_terms(&query.hotel_province)
+        || has_filter_terms(&query.hotel_city)
+        || has_filter_terms(&query.hotel_county)
     {
         "records INDEXED BY idx_records_hotel_region"
-    } else if !query.household_province.trim().is_empty()
-        || !query.household_city.trim().is_empty()
-        || !query.household_county.trim().is_empty()
-        || !query.exclude_household_province.trim().is_empty()
-        || !query.exclude_household_city.trim().is_empty()
-        || !query.exclude_household_county.trim().is_empty()
+    } else if has_filter_terms(&query.household_province)
+        || has_filter_terms(&query.household_city)
+        || has_filter_terms(&query.household_county)
+        || has_filter_terms(&query.exclude_household_province)
+        || has_filter_terms(&query.exclude_household_city)
+        || has_filter_terms(&query.exclude_household_county)
     {
         "records INDEXED BY idx_records_household_split"
-    } else if !query.hotel_search.trim().is_empty() {
+    } else if has_filter_terms(&query.hotel_search) {
         "records INDEXED BY idx_records_hotel_name"
     } else {
         "records"
@@ -1442,40 +1418,52 @@ fn fast_record_filter_count(
         || query.min_age.is_some()
         || query.max_age.is_some()
         || !query.gender.trim().is_empty()
-        || !query.exclude_household_province.trim().is_empty()
-        || !query.exclude_household_city.trim().is_empty()
-        || !query.exclude_household_county.trim().is_empty()
+        || has_filter_terms(&query.exclude_household_province)
+        || has_filter_terms(&query.exclude_household_city)
+        || has_filter_terms(&query.exclude_household_county)
     {
         return Ok(None);
     }
 
     let hotel_regions = [
-        ("hotel_province", normalize(&query.hotel_province)),
-        ("hotel_city", normalize(&query.hotel_city)),
-        ("hotel_county", normalize(&query.hotel_county)),
+        ("hotel_province", split_filter_terms(&query.hotel_province)),
+        ("hotel_city", split_filter_terms(&query.hotel_city)),
+        ("hotel_county", split_filter_terms(&query.hotel_county)),
     ];
     let household_regions = [
-        ("household_province", normalize(&query.household_province)),
-        ("household_city", normalize(&query.household_city)),
-        ("household_county", normalize(&query.household_county)),
+        (
+            "household_province",
+            split_filter_terms(&query.household_province),
+        ),
+        ("household_city", split_filter_terms(&query.household_city)),
+        (
+            "household_county",
+            split_filter_terms(&query.household_county),
+        ),
     ];
     let active_regions = hotel_regions
-        .iter()
-        .chain(household_regions.iter())
-        .filter(|(_, value)| !value.is_empty())
+        .into_iter()
+        .chain(household_regions)
+        .filter(|(_, terms)| !terms.is_empty())
         .collect::<Vec<_>>();
     let hotel_terms = split_hotel_terms(&query.hotel_search);
 
     match (active_regions.as_slice(), hotel_terms.as_slice()) {
-        ([(filter_kind, value)], []) => {
-            let (lower, upper) = prefix_range(value);
+        ([(filter_kind, terms)], []) => {
+            let mut clauses = vec!["session_id = ?".to_string(), "filter_kind = ?".to_string()];
+            let mut values = vec![
+                Value::Text(session_id.to_string()),
+                Value::Text((*filter_kind).to_string()),
+            ];
+            if let Some(clause) = contains_any_clause("value_norm", terms, &mut values) {
+                clauses.push(clause);
+            }
+            let sql = format!(
+                "SELECT COALESCE(SUM(record_count), 0) FROM record_filter_counts WHERE {}",
+                clauses.join(" AND ")
+            );
             let total = connection
-                .query_row(
-                    "SELECT COALESCE(SUM(record_count), 0) FROM record_filter_counts \
-                     WHERE session_id = ?1 AND filter_kind = ?2 AND value_norm >= ?3 AND value_norm < ?4",
-                    params![session_id, filter_kind, lower, upper],
-                    |row| row.get(0),
-                )
+                .query_row(&sql, params_from_iter(values.iter()), |row| row.get(0))
                 .map_err(sql_error)?;
             Ok(Some(total))
         }
@@ -1934,11 +1922,40 @@ fn multi_row_insert_sql(prefix: &str, value_group: &str, row_count: usize) -> St
 }
 
 fn split_hotel_terms(value: &str) -> Vec<String> {
+    split_filter_terms(value)
+}
+
+fn split_filter_terms(value: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
     value
         .split([',', '，', '、', ';', '；', '\n', '\r'])
-        .map(normalize)
-        .filter(|value| !value.is_empty())
+        .filter_map(|part| {
+            let term = normalize(part);
+            if term.is_empty() || !seen.insert(term.clone()) {
+                None
+            } else {
+                Some(term)
+            }
+        })
         .collect()
+}
+
+fn has_filter_terms(value: &str) -> bool {
+    value
+        .split([',', '，', '、', ';', '；', '\n', '\r'])
+        .any(|part| !normalize(part).is_empty())
+}
+
+fn contains_any_clause(column: &str, terms: &[String], values: &mut Vec<Value>) -> Option<String> {
+    if terms.is_empty() {
+        return None;
+    }
+    let mut clauses = Vec::with_capacity(terms.len());
+    for term in terms {
+        clauses.push(format!("{column} LIKE ? ESCAPE '\\'"));
+        values.push(Value::Text(contains_pattern(term)));
+    }
+    Some(format!("({})", clauses.join(" OR ")))
 }
 
 fn normalize(value: &str) -> String {
@@ -1949,12 +1966,6 @@ fn normalize(value: &str) -> String {
 
 fn contains_pattern(value: &str) -> String {
     format!("%{}%", escape_like(value))
-}
-
-fn prefix_range(value: &str) -> (String, String) {
-    // BINARY collation range for prefix semantics. This is more reliably indexable than
-    // depending on SQLite LIKE optimization, especially for normalized non-ASCII text.
-    (value.to_string(), format!("{value}\u{10ffff}"))
 }
 
 fn fuzzy_pattern(value: &str) -> String {
@@ -2587,10 +2598,8 @@ mod tests {
 
     #[test]
     fn explain_query_plan_uses_indexes_on_fast_paths() {
-        // Smoke check that the four fast paths (search_text FTS5, household split prefix,
-        // hotel jurisdiction split prefix, person_hotel_regions jurisdiction) are served
-        // by an index seek, not a SCAN. Runs against a small populated fixture and
-        // inspects the textual EXPLAIN QUERY PLAN output.
+        // Smoke check that FTS search and normalized region contains filters remain
+        // session-bounded through the existing split-column/child-table indexes.
         let (root, store) = test_store();
         store.save(&sample_session()).unwrap();
         let connection = store.connection().unwrap();
@@ -2624,7 +2633,7 @@ mod tests {
             "expected FTS5 or index seek in plan, got: {plan_text}"
         );
 
-        // 2. household split prefix via idx_people_household_split.
+        // 2. household substring confirmation scans only the indexed session partition.
         let mut q = query();
         q.household_province = "安徽".into();
         let (where_sql, values) = build_person_filter("session-1", &q);
@@ -2641,7 +2650,7 @@ mod tests {
             "expected idx_people_household_split seek, got: {plan_text}"
         );
 
-        // 3. hotel_region jurisdiction prefix via the composite PRIMARY KEY auto-index.
+        // 3. hotel-region substring confirmation stays inside the correlated child rows.
         let mut q = query();
         q.hotel_province = "安徽".into();
         let (where_sql, values) = build_person_filter("session-1", &q);
@@ -2658,7 +2667,7 @@ mod tests {
             "expected person_hotel_regions PRIMARY KEY seek, got: {plan_text}"
         );
 
-        // 4. records household split via idx_records_household_split.
+        // 4. imported-record household confirmation uses the split-column index partition.
         let settings = AnalysisSettings::default();
         let records_query = ImportedRecordsQuery {
             household_province: "安徽".into(),
@@ -2789,7 +2798,7 @@ mod tests {
             .query_imported_records(
                 "session-1",
                 &ImportedRecordsQuery {
-                    household_province: "alp".into(),
+                    household_province: "zzz,lph,lph".into(),
                     page: 1,
                     page_size: 50,
                     ..Default::default()
@@ -2797,6 +2806,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(page.total, 1);
+        assert_eq!(page.items.len(), 1);
 
         session.records[0].household_province = "beta".into();
         session.records[0].household_region = "beta city county".into();
@@ -2806,7 +2816,7 @@ mod tests {
             .query_imported_records(
                 "session-1",
                 &ImportedRecordsQuery {
-                    household_province: "alp".into(),
+                    household_province: "zzz,lph".into(),
                     page: 1,
                     page_size: 50,
                     ..Default::default()
@@ -2818,7 +2828,7 @@ mod tests {
             .query_imported_records(
                 "session-1",
                 &ImportedRecordsQuery {
-                    household_province: "bet".into(),
+                    household_province: "et,zzz".into(),
                     page: 1,
                     page_size: 50,
                     ..Default::default()
@@ -2826,38 +2836,44 @@ mod tests {
             )
             .unwrap();
         assert_eq!(page.total, 1);
+        assert_eq!(page.items.len(), 1);
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn household_split_column_prefix_semantic_replaces_substring() {
-        // The new prefix semantic should match leading characters of province/city/county
-        // but NOT a middle substring — that is the documented product tradeoff. Existing
-        // tests `hotel_terms_use_fuzzy_and_and_regions_match_one_stay` and
-        // `person_attributes_and_household_filters_are_applied_in_sqlite` already exercise
-        // the prefix path against typical leading-char input; this test pins the negative
-        // case: mid-substring like '省' won't match.
+    fn split_filter_terms_supports_all_separators_and_deduplicates() {
+        assert_eq!(
+            split_filter_terms(" 安徽,浙 江，江苏、四川;重庆；北京\n天津\r上海；安 徽 "),
+            vec!["安徽", "浙江", "江苏", "四川", "重庆", "北京", "天津", "上海"]
+        );
+        assert_eq!(split_filter_terms("An Hui, an hui"), vec!["anhui"]);
+    }
+
+    #[test]
+    fn household_filters_use_normalized_substring_and_multi_value_or() {
         let (root, store) = test_store();
         store.save(&sample_session()).unwrap();
 
-        // '安徽' prefix matches the stored household_province '安徽省'.
         let mut matched = query();
-        matched.household_province = "安徽".into();
+        matched.household_province = "浙江，徽 省".into();
+        matched.household_city = "杭州、山 市".into();
+        matched.household_county = "西湖\n门 县".into();
         assert_eq!(store.query_people("session-1", &matched).unwrap().total, 1);
 
-        // '省' as a mid-substring no longer matches under prefix semantic — this is the
-        // deliberate narrowing that lets the B-tree index (idx_people_household_split)
-        // serve the filter. Users type the region's leading characters.
         let mut matched = query();
-        matched.household_province = "省".into();
+        matched.household_province = "浙江，江苏".into();
         assert_eq!(store.query_people("session-1", &matched).unwrap().total, 0);
 
-        // Imported-record path likewise.
         let page = store
             .query_imported_records(
                 "session-1",
                 &ImportedRecordsQuery {
-                    household_province: "安徽".into(),
+                    hotel_province: "浙江,徽省".into(),
+                    hotel_city: "杭州；山市".into(),
+                    hotel_county: "西湖\r\n门县".into(),
+                    household_province: "浙江,徽省".into(),
+                    household_city: "杭州；山市".into(),
+                    household_county: "西湖\r\n门县".into(),
                     page: 1,
                     page_size: 50,
                     ..Default::default()
@@ -2870,7 +2886,7 @@ mod tests {
             .query_imported_records(
                 "session-1",
                 &ImportedRecordsQuery {
-                    household_province: "省".into(),
+                    household_province: "浙江,江苏".into(),
                     page: 1,
                     page_size: 50,
                     ..Default::default()
@@ -2882,28 +2898,23 @@ mod tests {
     }
 
     #[test]
-    fn exclude_household_split_column_prefix_takes_negation_correctly() {
-        // NOT over prefix match set must exclude only when the user-typed prefix actually
-        // is the leading substring of the stored region component.
+    fn exclude_household_multi_value_substrings_take_negation_correctly() {
         let (root, store) = test_store();
         store.save(&sample_session()).unwrap();
 
-        // Excluding '安徽' (prefix of stored '安徽省') must drop the only person.
         let mut matched = query();
-        matched.exclude_household_province = "安徽".into();
+        matched.exclude_household_province = "浙江,徽省".into();
         assert_eq!(store.query_people("session-1", &matched).unwrap().total, 0);
 
-        // Excluding an unrelated prefix '浙江' keeps the person.
         let mut matched = query();
-        matched.exclude_household_province = "浙江".into();
+        matched.exclude_household_province = "浙江,江苏".into();
         assert_eq!(store.query_people("session-1", &matched).unwrap().total, 1);
 
-        // Imported-record exclude path: same semantic.
         let page = store
             .query_imported_records(
                 "session-1",
                 &ImportedRecordsQuery {
-                    exclude_household_county: "祁门".into(),
+                    exclude_household_county: "西湖；门县".into(),
                     page: 1,
                     page_size: 50,
                     ..Default::default()
@@ -2917,13 +2928,23 @@ mod tests {
     #[test]
     fn hotel_terms_use_fuzzy_and_and_regions_match_one_stay() {
         let (root, store) = test_store();
-        store.save(&sample_session()).unwrap();
+        let mut session = sample_session();
+        session.analyses[0].summary.hotel_regions.push(HotelRegion {
+            province: "浙江省".into(),
+            city: "杭州市".into(),
+            county: "西湖区".into(),
+            region: "浙江省杭州市西湖区".into(),
+        });
+        store.save(&session).unwrap();
         let mut matched = query();
         matched.hotel_search = "旅A，商务B".into();
-        matched.hotel_province = "安徽".into();
-        matched.hotel_county = "祁门".into();
+        matched.hotel_province = "江苏，徽省".into();
+        matched.hotel_city = "南京；山市".into();
+        matched.hotel_county = "西湖\n门县".into();
         assert_eq!(store.query_people("session-1", &matched).unwrap().total, 1);
 
+        matched.hotel_province = "安徽".into();
+        matched.hotel_city.clear();
         matched.hotel_county = "西湖".into();
         assert_eq!(store.query_people("session-1", &matched).unwrap().total, 0);
         fs::remove_dir_all(root).unwrap();
@@ -3291,7 +3312,7 @@ mod tests {
     fn benchmark_filter_latency_on_large_session() {
         // Builds (people_count, records_count) synthetic session and times the four
         // fast paths surfaced in this task: search_text FTS5 trigram, household
-        // split-column prefix, hotel jurisdiction split-column prefix (records side),
+        // split-column normalized contains, hotel jurisdiction normalized contains,
         // plus the layered fuzzy fallback for hotel_name (ordered-subseq LIKE on the
         // (session_id, hotel_name_norm) indexed range). Prints milliseconds for each
         // path; expected to stay under 500ms per path at 1M records.
@@ -3415,14 +3436,14 @@ mod tests {
         let fts5_ms = started.elapsed().as_millis();
         assert!(!page.items.is_empty());
 
-        // 2. people household_province prefix.
+        // 2. people household_province contains.
         let mut q = query();
         q.household_province = "安徽".into();
         let started = Instant::now();
         let _page = reopened.query_people("filter-bench", &q).unwrap();
         let household_ms = started.elapsed().as_millis();
 
-        // 3. imported-records household_province prefix.
+        // 3. imported-records household_province contains.
         let started = Instant::now();
         let _page = reopened
             .query_imported_records(
@@ -3437,7 +3458,7 @@ mod tests {
             .unwrap();
         let records_household_ms = started.elapsed().as_millis();
 
-        // 4. imported-records hotel_jurisdiction prefix.
+        // 4. imported-records hotel_jurisdiction contains.
         let started = Instant::now();
         let _page = reopened
             .query_imported_records(
@@ -3468,7 +3489,7 @@ mod tests {
         let fuzzy_ms = started.elapsed().as_millis();
 
         println!(
-            "people={} records={} save_ms={} fts5_search_ms={} household_prefix_ms={} records_household_ms={} records_hotel_ms={} fuzzy_hotel_ms={}",
+            "people={} records={} save_ms={} fts5_search_ms={} household_contains_ms={} records_household_ms={} records_hotel_ms={} fuzzy_hotel_ms={}",
             people_count,
             records_count,
             save_elapsed.as_millis(),

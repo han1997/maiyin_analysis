@@ -302,20 +302,28 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   Snapshots and commands never transfer every raw row through IPC for ordinary browsing.
 - Free-text `search` uses backend FTS5 trigram for normalized values of three or more
   characters, with a short-query fallback for one or two characters. Hotel and
-  household province/city/county filters are prefix matches implemented as range
-  predicates against split normalized columns, not arbitrary substring matches against
-  concatenated region text.
+  household province/city/county remain string fields at the TypeScript/Rust boundary;
+  each string accepts English/Chinese commas, enumeration commas, English/Chinese
+  semicolons, LF, or CR. The query layer removes whitespace, lowercases, discards empty
+  and duplicate terms, and performs arbitrary substring matching on split normalized
+  columns. Terms within one field use OR; populated include fields use AND; any matching
+  household exclusion field excludes the row. Never match against concatenated region
+  text merely to implement the field-specific contract.
 - Imported-record `total` may be answered from backend aggregate counts for safe
   single-field filters; combined filters and selected time windows still use exact
   row-level SQLite predicates.
-- `PersonSummary` includes `maxWeekCount`, `maxMonthCount`, `maxYearCount`,
-  `hotelNames`, and `hotelRegions`. Each hotel-region entry is
+- `PersonSummary` includes `householdProvince`, `householdCity`, `householdCounty`,
+  `maxWeekCount`, `maxMonthCount`, `maxYearCount`, `hotelNames`, and `hotelRegions`.
+  Structured household fields use serde defaults and are optional in TypeScript for
+  legacy payload compatibility. Each hotel-region entry is
   `{ province, city, county, region }`; persisted additions use serde defaults.
 - Hotel-name input is split on comma, Chinese comma, enumeration comma,
   semicolon, or newline. Every non-empty term must fuzzy-match at least one
   hotel name (AND across terms).
-- Populated province/city/county filters must match one shared `hotelRegions`
-  entry; never combine components from different stays.
+- Populated hotel province/city/county fields combine with AND and must match one shared
+  `hotelRegions` entry; never combine components from different stays. Household include
+  fields also combine with AND, while household exclusion fields retain any-match
+  exclusion semantics.
 - Stored session payloads keep model schema version `4` inside SQLite database version
   `5`. Database v4→v5 is lossless and keeps old sessions searchable; database versions
   1–3 are cleared for source-file re-import. Legacy standalone JSON history still has no
@@ -334,7 +342,7 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 | Start boundary after end boundary | `validation_error` and keep settings UI open |
 | Result-filter minimum age exceeds maximum age | Frontend toast; do not update the applied query or call Rust |
 | Missing check-in | Exclude from time-window analysis |
-| Old summary lacks `hotelRegions` | Deserialize to an empty list via serde default |
+| Old summary lacks `hotelRegions` or structured household fields | Deserialize lists/strings to empty defaults; TypeScript treats structured household fields as optional |
 | SQLite `user_version = 1` | Drop application tables, recreate database version `5`, and return an empty history list; the user re-imports source files |
 | SQLite `user_version = 2` | Drop application tables, recreate database version `5`, and return an empty history list; the user re-imports source files |
 | SQLite `user_version = 3` | Drop application and FTS tables, recreate database version `5`, and return an empty history list; the user re-imports source files |
@@ -356,8 +364,9 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   SQLite query and returns one filtered page without decoding `record_json`.
 - Good: `search = "祁门县"` takes the FTS5 trigram path; `search = "祁"` remains
   correct through the short-query fallback.
-- Good: `hotelProvince = "安徽"` matches `安徽省`; `hotelProvince = "省"` does not match
-  because jurisdiction filters are prefix-based.
+- Good: `hotelProvince = "浙江，徽 省"` matches `安徽省`; terms use OR and matching
+  ignores whitespace and case. `hotelProvince = "安徽"` plus `hotelCounty = "西湖"`
+  still fails when those values exist only in different hotel-region entries.
 - Bad: adding province, household, age, or gender back to `AnalysisSettings`,
   because this changes the evidence set and reintroduces slow searches.
 - Bad: matching province from one stay and county from another; all populated
@@ -374,8 +383,11 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 - Narrow boundaries remove outside records from totals and evidence ids.
 - Fuzzy hotel-name filtering matches ordered non-contiguous characters and
   multiple separators use AND semantics.
-- Hotel jurisdiction tests assert same-entry province/city/county matching.
-- Household include/exclude, age, gender, alert-state, and search behavior have SQLite query tests; browser fixtures retain matching TypeScript tests.
+- Hotel jurisdiction tests assert arbitrary substring matching, all supported separators,
+  duplicate removal, OR within fields, AND across fields, and same-entry province/city/county matching.
+- Household include/exclude, age, gender, alert-state, and search behavior have SQLite
+  query tests; browser fixtures retain matching TypeScript tests and structured household
+  fields so both runtimes exercise the same field boundaries.
 - Imported-record tests cover paging, stable time order, inclusive start/end boundaries,
   missing check-ins, the camelCase page DTO, and result filters (hotel name, hotel
   jurisdiction, household include/exclude, age range, gender, keyword search) applied
@@ -401,7 +413,7 @@ await appApi.reanalyze({ ...settings, frequencyMode: "rolling", province: "安�
 
 ```ts
 await appApi.reanalyze({ ...settings, frequencyMode: "rolling" });
-setQuery((current) => ({ ...current, hotelProvince: "安徽省", page: 1 }));
+setQuery((current) => ({ ...current, hotelProvince: "浙江，徽省", page: 1 }));
 const records = await appApi.getImportedRecords({ page: 1, pageSize: 50 });
 ```
 

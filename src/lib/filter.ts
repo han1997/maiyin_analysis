@@ -3,20 +3,24 @@ import type { ImportedRecordsQuery, PersonPage, PersonQuery, PersonSummary } fro
 export function filterPeople(people: PersonSummary[], query: PersonQuery): PersonPage {
   const keyword = query.search.trim().toLocaleLowerCase("zh-CN");
   const hotelKeywords = splitHotelKeywords(query.hotelSearch ?? "");
-  const hotelRegionFilters = [query.hotelProvince, query.hotelCity, query.hotelCounty].map((value) => normalize(value ?? ""));
+  const hotelRegionFilters = [query.hotelProvince, query.hotelCity, query.hotelCounty].map((value) =>
+    splitFilterTerms(value ?? ""),
+  );
   const includedHouseholdFilters = [query.householdProvince, query.householdCity, query.householdCounty]
-    .map((value) => normalize(value ?? ""))
-    .filter(Boolean);
+    .map((value) => splitFilterTerms(value ?? ""));
   const excludedHouseholdFilters = [query.excludeHouseholdProvince, query.excludeHouseholdCity, query.excludeHouseholdCounty]
-    .map((value) => normalize(value ?? ""))
-    .filter(Boolean);
+    .map((value) => splitFilterTerms(value ?? ""));
   const filtered = people.filter((person) => {
     if (query.level !== "全部等级" && person.level !== query.level) return false;
     if (query.alertState === "仅预警人员" && person.alertCount === 0) return false;
     if (query.alertState === "未预警人员" && person.alertCount > 0) return false;
     if (!matchesEveryHotel(person, hotelKeywords)) return false;
     if (!matchesHotelRegion(person, hotelRegionFilters)) return false;
-    if (!matchesHouseholdRegion(person.householdRegion, includedHouseholdFilters, excludedHouseholdFilters)) return false;
+    if (!matchesHouseholdRegion(
+      [person.householdProvince, person.householdCity, person.householdCounty],
+      includedHouseholdFilters,
+      excludedHouseholdFilters,
+    )) return false;
     if (query.minAge != null && (person.age == null || person.age < query.minAge)) return false;
     if (query.maxAge != null && (person.age == null || person.age > query.maxAge)) return false;
     if (query.gender && person.gender !== query.gender) return false;
@@ -48,10 +52,16 @@ export function filterPeople(people: PersonSummary[], query: PersonQuery): Perso
 }
 
 function splitHotelKeywords(value: string): string[] {
-  return value
-    .split(/[,，、;；\n]+/)
-    .map(normalize)
-    .filter(Boolean);
+  return splitFilterTerms(value);
+}
+
+export function splitFilterTerms(value: string): string[] {
+  return [...new Set(
+    value
+      .split(/[,，、;；\r\n]+/)
+      .map(normalize)
+      .filter(Boolean),
+  )];
 }
 
 function matchesEveryHotel(person: PersonSummary, keywords: string[]): boolean {
@@ -60,21 +70,29 @@ function matchesEveryHotel(person: PersonSummary, keywords: string[]): boolean {
   return keywords.every((keyword) => hotels.some((hotel) => fuzzyIncludes(hotel, keyword)));
 }
 
-function matchesHotelRegion(person: PersonSummary, filters: string[]): boolean {
-  if (filters.every((value) => !value)) return true;
+function matchesHotelRegion(person: PersonSummary, filters: string[][]): boolean {
+  if (filters.every((terms) => terms.length === 0)) return true;
   return (person.hotelRegions ?? []).some((hotelRegion) => {
     const fields = [hotelRegion.province, hotelRegion.city, hotelRegion.county];
-    return filters.every((filter, index) => {
-      if (!filter) return true;
-      return [fields[index] ?? "", hotelRegion.region].some((value) => normalize(value).includes(filter));
-    });
+    return filters.every((terms, index) => matchesAnySubstring(fields[index] ?? "", terms));
   });
 }
 
-export function matchesHouseholdRegion(householdRegion: string, included: string[], excluded: string[]): boolean {
-  const value = normalize(householdRegion);
-  if (!included.every((item) => value.includes(item))) return false;
-  return excluded.length === 0 || !excluded.every((item) => value.includes(item));
+function matchesHouseholdRegion(
+  householdFields: Array<string | undefined>,
+  included: string[][],
+  excluded: string[][],
+): boolean {
+  if (!included.every((terms, index) => matchesAnySubstring(householdFields[index] ?? "", terms))) {
+    return false;
+  }
+  return !excluded.some((terms, index) => terms.length > 0 && matchesAnySubstring(householdFields[index] ?? "", terms));
+}
+
+function matchesAnySubstring(value: string, terms: string[]): boolean {
+  if (terms.length === 0) return true;
+  const normalized = normalize(value);
+  return terms.some((term) => normalized.includes(term));
 }
 
 export function normalize(value: string): string {
@@ -101,6 +119,9 @@ export interface ImportedRecordFilterFields {
   hotelCounty: string;
   hotelRegion: string;
   householdRegion: string;
+  householdProvince: string;
+  householdCity: string;
+  householdCounty: string;
   age: number | null;
   gender: string;
 }
@@ -115,21 +136,23 @@ export function recordMatchesImportedFilter(
     if (!hotelKeywords.every((keyword) => fuzzyIncludes(hotelName, keyword))) return false;
   }
   const hotelRegionFilters = [query.hotelProvince, query.hotelCity, query.hotelCounty].map((value) =>
-    normalize(value ?? ""),
+    splitFilterTerms(value ?? ""),
   );
-  if (hotelRegionFilters.some((value) => value)) {
+  if (hotelRegionFilters.some((terms) => terms.length > 0)) {
     const fields = [record.hotelProvince, record.hotelCity, record.hotelCounty];
-    if (!hotelRegionFilters.every((filter, index) => !filter || normalize(fields[index] ?? "").includes(filter))) {
+    if (!hotelRegionFilters.every((terms, index) => matchesAnySubstring(fields[index] ?? "", terms))) {
       return false;
     }
   }
   const includedHouseholdFilters = [query.householdProvince, query.householdCity, query.householdCounty]
-    .map((value) => normalize(value ?? ""))
-    .filter(Boolean);
+    .map((value) => splitFilterTerms(value ?? ""));
   const excludedHouseholdFilters = [query.excludeHouseholdProvince, query.excludeHouseholdCity, query.excludeHouseholdCounty]
-    .map((value) => normalize(value ?? ""))
-    .filter(Boolean);
-  if (!matchesHouseholdRegion(record.householdRegion, includedHouseholdFilters, excludedHouseholdFilters)) {
+    .map((value) => splitFilterTerms(value ?? ""));
+  if (!matchesHouseholdRegion(
+    [record.householdProvince, record.householdCity, record.householdCounty],
+    includedHouseholdFilters,
+    excludedHouseholdFilters,
+  )) {
     return false;
   }
   if (query.minAge != null && (record.age == null || record.age < query.minAge)) return false;

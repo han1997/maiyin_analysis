@@ -35,6 +35,10 @@ export interface PersonSummary {
   idNo: string;
   phone: string;
   householdRegion: string;
+  /** Structured household fields returned by Rust; optional for legacy payloads. */
+  householdProvince?: string;
+  householdCity?: string;
+  householdCounty?: string;
   age: number | null;
   gender: string;
   totalRecords: number;
@@ -92,12 +96,15 @@ export interface ImportedStayRecord {
 export interface ImportedRecordsQuery {
   search: string;
   hotelSearch?: string;
+  /** Region inputs accept delimited fuzzy terms; terms within one field use OR. */
   hotelProvince?: string;
   hotelCity?: string;
   hotelCounty?: string;
+  /** Household include fields combine with AND after per-field OR matching. */
   householdProvince?: string;
   householdCity?: string;
   householdCounty?: string;
+  /** Any matching household exclusion term excludes the result. */
   excludeHouseholdProvince?: string;
   excludeHouseholdCity?: string;
   excludeHouseholdCounty?: string;
@@ -155,12 +162,15 @@ export interface WorkspaceSnapshot {
 export interface PersonQuery {
   search: string;
   hotelSearch?: string;
+  /** Region inputs accept delimited fuzzy terms; terms within one field use OR. */
   hotelProvince?: string;
   hotelCity?: string;
   hotelCounty?: string;
+  /** Household include fields combine with AND after per-field OR matching. */
   householdProvince?: string;
   householdCity?: string;
   householdCounty?: string;
+  /** Any matching household exclusion term excludes the result. */
   excludeHouseholdProvince?: string;
   excludeHouseholdCity?: string;
   excludeHouseholdCounty?: string;
