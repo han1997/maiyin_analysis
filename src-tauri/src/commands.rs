@@ -150,11 +150,11 @@ pub async fn merge_sessions(
         let mut missing_id_count = 0;
         let mut file_count = 0;
         for session_id in &session_ids {
-            let session = store.load(session_id)?;
-            file_count += session.file_count;
-            short_stay_count += session.import_stats.short_stay_count;
-            missing_id_count += session.import_stats.missing_id_count;
-            for mut record in session.records {
+            let (metadata, records) = store.load_records(session_id)?;
+            file_count += metadata.file_count;
+            short_stay_count += metadata.import_stats.short_stay_count;
+            missing_id_count += metadata.import_stats.missing_id_count;
+            for mut record in records {
                 let key = record_key(&record);
                 if !seen.insert(key) {
                     duplicate_count += 1;
@@ -223,13 +223,15 @@ pub async fn reanalyze(
     validate_settings(&settings)?;
     let (store, session_id) = current_store(&state)?;
     let metadata = tauri::async_runtime::spawn_blocking(move || {
-        let mut session = store.load(&session_id)?;
-        let (analyses, stats) = analyze_records(&session.records, &settings);
-        session.settings = settings;
-        session.analyses = analyses;
-        session.stats = stats;
-        session.schema_version = CURRENT_SCHEMA_VERSION;
-        store.save(&session)
+        let (_, records) = store.load_records(&session_id)?;
+        let (analyses, stats) = analyze_records(&records, &settings);
+        store.replace_analysis(
+            &session_id,
+            CURRENT_SCHEMA_VERSION,
+            &settings,
+            &analyses,
+            &stats,
+        )
     })
     .await
     .map_err(task_error)??;

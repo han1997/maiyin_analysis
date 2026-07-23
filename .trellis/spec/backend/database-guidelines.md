@@ -14,11 +14,13 @@ history browsing must never deserialize one full session object.
 ```rust
 SessionStore::open(storage_root: PathBuf) -> Result<SessionStore, AppError>
 SessionStore::save(session: &StoredSession) -> Result<SessionMetadata, AppError>
+SessionStore::replace_analysis(session_id: &str, schema_version: u32, settings: &AnalysisSettings, analyses: &[PersonAnalysis], stats: &AnalysisStats) -> Result<SessionMetadata, AppError>
 SessionStore::metadata(session_id: &str) -> Result<SessionMetadata, AppError>
 SessionStore::query_people(session_id: &str, query: &PersonQuery) -> Result<PersonPage, AppError>
 SessionStore::query_imported_records(session_id: &str, query: &ImportedRecordsQuery) -> Result<ImportedRecordsPage, AppError>
 SessionStore::person_detail(session_id: &str, person_key: &str) -> Result<PersonDetail, AppError>
 SessionStore::load(session_id: &str) -> Result<StoredSession, AppError>
+SessionStore::load_records(session_id: &str) -> Result<(SessionMetadata, Vec<Record>), AppError>
 SessionStore::delete(session_id: &str) -> Result<Option<SessionMetadata>, AppError>
 SessionStore::move_to(destination_root: PathBuf) -> Result<SessionStore, AppError>
 ```
@@ -79,6 +81,15 @@ owns schema compatibility.
   populated with transaction-local `INSERT ... SELECT`. Replacing a session first deletes
   its prior rows inside the same transaction, so a preparation, compression, constraint,
   or FTS failure rolls back to the previous complete session.
+- Reanalysis must use `load_records`, not full `load`: prior people summaries and alerts
+  are outputs being replaced and must not be decompressed or deserialized first. Session
+  merge also uses `load_records` because it consumes source metadata and raw records only.
+- `replace_analysis` is the reanalysis write path. In one transaction it deletes people
+  and person-hotel FTS documents through their source rowids, cascades the old people /
+  alerts / hotel rows, updates session settings and statistics, then inserts the new
+  analysis rows and people FTS. It must preserve `records`, records FTS rowids, and
+  `record_filter_counts`; unchanged imported data must never be rewritten merely because
+  thresholds or the selected time window changed.
 - New database files set `page_size=16384` before entering WAL and bulk-save connections
   use an on-demand cache capped at 128 MiB. Existing version-4/version-5 files keep their
   current page size; never run startup `VACUUM` merely to change it. Keep
@@ -130,6 +141,7 @@ owns schema compatibility.
 | Missing session or person | `session_not_found` or `validation_error` |
 | Unsupported nonzero database version other than `1`, `2`, `3`, `4`, or `5` | `storage_error` naming both versions |
 | Duplicate row, serialization/compression failure, or FTS failure during save | Transaction rolls back; prior session remains readable |
+| Duplicate person, compression failure, or people FTS failure during `replace_analysis` | Transaction rolls back settings, statistics, people/alerts/hotels, and FTS; records remain unchanged |
 | Corrupt `MYL4` payload | `storage_error`; never return a partial decoded session/page |
 | Page size below 1 or above 500 | Clamp to `1..=500` |
 | Missing record check-in | Exclude it from imported-record pages and counts |
@@ -164,6 +176,11 @@ owns schema compatibility.
 - Good: a new large-session save pipelines bounded preparation with multi-row INSERT,
   writes only compact v2 FTS, commits under `WAL + synchronous=NORMAL`, and stores
   compressed payloads without changing query DTOs.
+- Good: reanalysis loads metadata plus records, computes results, then atomically replaces
+  only analysis-owned tables; record rowids, record search documents, and cached record
+  filter counts remain byte-for-byte unchanged.
+- Good: merging multiple sessions loads only source metadata and records, then performs one
+  full save for the newly combined record set.
 - Good: opening a populated version-4 database preserves its rows and old search index,
   adds version-5 tables/index cleanup, and accepts a new compressed save.
 - Base: deleting one of several listed sessions runs on the blocking worker, removes its
@@ -191,6 +208,8 @@ owns schema compatibility.
   measurement, or changing an existing database page size through startup `VACUUM`.
 - Bad: preparing the entire session before opening the transaction; compressed payloads
   for hundreds of thousands of rows must remain chunked and bounded.
+- Bad: implementing reanalysis as `load -> analyze -> save`, because it decodes obsolete
+  summaries and rewrites every unchanged record and records FTS document.
 
 - Bad: deleting contentless FTS rows with `WHERE session_id = ?`, or deleting the shared
   database file while another listed session must be retained.
@@ -224,6 +243,13 @@ owns schema compatibility.
 - Assert replacing a session also replaces `record_filter_counts`; stale aggregate
   counts must not survive.
 - Inject a duplicate-key save failure and assert the previous session remains intact.
+- Assert `load_records` succeeds without decoding people/alert payloads and is used by
+  reanalysis/merge paths that discard prior analysis.
+- After `replace_analysis`, assert record `(rowid, uid, record_json)`, records FTS rowids,
+  and `record_filter_counts` are unchanged while settings, stats, people, alerts, hotels,
+  and people FTS reflect the new result.
+- Inject a duplicate person during `replace_analysis` and assert the complete old analysis,
+  settings, statistics, and people FTS remain queryable after rollback.
 - Delete the active session and assert the next listed session becomes active.
 - Delete one of multiple sessions and assert its FTS rowids are absent while the other
   session's FTS rowids remain.
@@ -255,6 +281,33 @@ let records = store.query_imported_records(&session_id, &records_query)?;
 
 The first path scales work with the entire history before the UI can render. The second
 keeps startup work bounded by session metadata and the requested page.
+
+#### Wrong: full-session reanalysis
+
+```rust
+let mut session = store.load(session_id)?;
+let (analyses, stats) = analyze_records(&session.records, settings);
+session.analyses = analyses;
+session.stats = stats;
+store.save(&session)?;
+```
+
+#### Correct: records-only load and analysis-only replacement
+
+```rust
+let (_, records) = store.load_records(session_id)?;
+let (analyses, stats) = analyze_records(&records, settings);
+store.replace_analysis(
+    session_id,
+    CURRENT_SCHEMA_VERSION,
+    settings,
+    &analyses,
+    &stats,
+)?;
+```
+
+The correct path preserves imported rows and their FTS/filter indexes while retaining
+the same one-transaction rollback guarantee for every analysis-owned table.
 
 #### Wrong: contentless FTS cleanup
 

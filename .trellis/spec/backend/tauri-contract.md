@@ -57,6 +57,9 @@ Storage rules:
   an empty workspace). The UI must remain responsive while the delete is running.
 - The backend only removes the database file when the target is the final listed session;
   otherwise it preserves the shared database and deletes the target's rows/FTS documents.
+- `reanalyze` keeps the public command/DTO unchanged but internally loads only metadata and
+  records, then atomically replaces analysis-owned people/alert/hotel rows. It must not
+  rewrite unchanged records, record FTS documents, or record filter-count caches.
 
 ### 4. Validation & Error Matrix
 
@@ -76,7 +79,8 @@ Storage rules:
 
 ### 5. Good / Base / Bad cases
 
-- Good: the UI calls `reanalyze(settings)` once, Rust recomputes all four alert types, persists the non-combined session, and returns one fresh snapshot.
+- Good: the UI calls `reanalyze(settings)` once, Rust recomputes all four alert types,
+  replaces only analysis-owned SQLite rows, and returns one fresh snapshot.
 - Base: browser preview calls the same `AppApi` method and returns clearly labeled demo data without reading file bytes.
 - Bad: React filters a subset and invents a new risk score that differs from Rust, or transfers each spreadsheet row through IPC.
 - Good: `get_person_detail` returns evidence only for the selected person and the UI opens a right-side inspector.
@@ -96,6 +100,8 @@ Storage rules:
 - Export tests for UTF-8 BOM, full identity values, formula-injection prefixing, and risk workbook rows.
 - TypeScript tests for search across identity/household/alert text, level/alert filters, and first render of browser preview.
 - Cross-layer assertions must verify camelCase DTO fields and structured `{ code, message }` errors.
+- Reanalysis storage tests must prove unchanged record rowids/search documents survive and
+  a failed analysis replacement rolls back the previous settings, people, alerts, and FTS.
 
 ### 7. Wrong vs Correct
 
@@ -330,6 +336,10 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   automatic upgrade path.
 - React never computes scores. Selected-window and rolling frequency scoring
   remain mutually exclusive in Rust.
+- Import, merge, and reanalysis share `analyze_records`; merge/reanalysis use records-only
+  session loading so discarded prior summaries and alerts are never decoded. Reanalysis
+  persists through `replace_analysis`, while import and a newly combined session still use
+  full `save` because they introduce a new record set.
 - Scores are: overlap `min(35, 20 + P*2 + D*5)`, same-day-many
   `min(45, 25 + (N-4)*5)`, frequency `min(80, 45 + (C-T)*6)`.
 

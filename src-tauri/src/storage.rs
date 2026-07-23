@@ -363,57 +363,12 @@ impl SessionStore {
             save_mark("records_and_fts");
         }
 
-        {
-            std::thread::scope(|scope| -> Result<(), AppError> {
-                let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-                let analyses = &session.analyses;
-                let producer = scope.spawn(move || {
-                    for chunk in analyses.chunks(SAVE_PREPARE_CHUNK_SIZE) {
-                        let prepared = prepare_person_chunk(chunk);
-                        let stop = prepared.is_err();
-                        if sender.send(prepared).is_err() || stop {
-                            break;
-                        }
-                    }
-                });
-                let consumer_result = (|| -> Result<(), AppError> {
-                    for prepared_people in receiver {
-                        let prepared_people = prepared_people?;
-                        insert_person_batches(&transaction, &session.session_id, &prepared_people)?;
-                        insert_alert_batches(&transaction, &session.session_id, &prepared_people)?;
-                        insert_person_hotel_batches(
-                            &transaction,
-                            &session.session_id,
-                            &prepared_people,
-                        )?;
-                        insert_person_hotel_region_batches(
-                            &transaction,
-                            &session.session_id,
-                            &prepared_people,
-                        )?;
-                    }
-                    Ok(())
-                })();
-                producer
-                    .join()
-                    .map_err(|_| AppError::Storage("people preparation worker panicked".into()))?;
-                consumer_result
-            })?;
-            #[cfg(test)]
-            save_mark("people_base");
-            // Populate people FTS in one statement as well. `people.rowid` is the only valid
-            // FTS rowid; person_key is session-local and cannot safely stand in for it.
-            transaction
-                .execute(
-                    "INSERT INTO people_search_fts_v2(rowid, search_text) \
-                     SELECT rowid, search_text FROM people \
-                     WHERE session_id = ?1",
-                    [&session.session_id],
-                )
-                .map_err(sql_error)?;
-            #[cfg(test)]
-            save_mark("people_fts");
-        }
+        insert_analysis_rows(&transaction, &session.session_id, &session.analyses)?;
+        #[cfg(test)]
+        save_mark("people_base");
+        insert_people_search_index(&transaction, &session.session_id)?;
+        #[cfg(test)]
+        save_mark("people_fts");
 
         if !session.is_combined {
             transaction
@@ -430,16 +385,71 @@ impl SessionStore {
         metadata_from(&connection, &session.session_id)
     }
 
+    pub fn replace_analysis(
+        &self,
+        session_id: &str,
+        schema_version: u32,
+        settings: &AnalysisSettings,
+        analyses: &[PersonAnalysis],
+        stats: &AnalysisStats,
+    ) -> Result<SessionMetadata, AppError> {
+        let settings_json = json(settings)?;
+        let stats_json = json(stats)?;
+        let _write_guard = self.lock_writes()?;
+        let mut connection = self.connection()?;
+        connection
+            .pragma_update(None, "cache_size", -BULK_SAVE_CACHE_KIB)
+            .map_err(sql_error)?;
+        let transaction = connection.transaction().map_err(sql_error)?;
+        ensure_session_exists(&transaction, session_id)?;
+
+        // Delete FTS documents through their mirrored source rowids before the people
+        // cascade removes those source rows. Raw records and their indexes are unchanged.
+        delete_analysis_fts_rows(&transaction, session_id)?;
+        transaction
+            .execute("DELETE FROM people WHERE session_id = ?1", [session_id])
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "UPDATE sessions SET
+                    schema_version = ?1,
+                    settings_json = ?2,
+                    stats_json = ?3,
+                    records = ?4,
+                    people = ?5
+                 WHERE session_id = ?6",
+                params![
+                    i64::from(schema_version),
+                    settings_json,
+                    stats_json,
+                    i64_from_usize(stats.records),
+                    i64_from_usize(stats.people),
+                    session_id,
+                ],
+            )
+            .map_err(sql_error)?;
+        insert_analysis_rows(&transaction, session_id, analyses)?;
+        insert_people_search_index(&transaction, session_id)?;
+        transaction.commit().map_err(sql_error)?;
+        metadata_from(&connection, session_id)
+    }
+
+    pub fn load_records(
+        &self,
+        session_id: &str,
+    ) -> Result<(SessionMetadata, Vec<Record>), AppError> {
+        let _read_guard = self.lock_reads()?;
+        let connection = self.connection()?;
+        let metadata = metadata_from(&connection, session_id)?;
+        let records = load_session_records(&connection, session_id)?;
+        Ok((metadata, records))
+    }
+
     pub fn load(&self, session_id: &str) -> Result<StoredSession, AppError> {
         let _read_guard = self.lock_reads()?;
         let connection = self.connection()?;
         let metadata = metadata_from(&connection, session_id)?;
-
-        let records = load_json_column::<Record>(
-            &connection,
-            "SELECT record_json FROM records WHERE session_id = ?1 ORDER BY uid",
-            session_id,
-        )?;
+        let records = load_session_records(&connection, session_id)?;
 
         let mut alerts_by_person: HashMap<String, Vec<AlertSummary>> = HashMap::new();
         {
@@ -826,9 +836,31 @@ fn delete_session_fts_rows(
     transaction: &Transaction<'_>,
     session_id: &str,
 ) -> Result<(), AppError> {
+    delete_fts_rows_for_sources(
+        transaction,
+        session_id,
+        &["records", "people", "person_hotels"],
+    )
+}
+
+fn delete_analysis_fts_rows(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+) -> Result<(), AppError> {
+    delete_fts_rows_for_sources(transaction, session_id, &["people", "person_hotels"])
+}
+
+fn delete_fts_rows_for_sources(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    source_tables: &[&str],
+) -> Result<(), AppError> {
     // Contentless FTS tables cannot reliably return their UNINDEXED session_id value.
     // Delete by the mirrored content-table rowid while those source rows still exist.
     for (fts_table, content_table) in SESSION_FTS_TABLES {
+        if !source_tables.contains(&content_table) {
+            continue;
+        }
         let exists = transaction
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
@@ -1524,6 +1556,17 @@ fn load_records_for_person(
     Ok(result)
 }
 
+fn load_session_records(
+    connection: &Connection,
+    session_id: &str,
+) -> Result<Vec<Record>, AppError> {
+    load_json_column(
+        connection,
+        "SELECT record_json FROM records WHERE session_id = ?1 ORDER BY uid",
+        session_id,
+    )
+}
+
 fn load_json_column<T: serde::de::DeserializeOwned>(
     connection: &Connection,
     sql: &str,
@@ -1652,6 +1695,56 @@ fn prepare_person_chunk(analyses: &[PersonAnalysis]) -> Result<Vec<PreparedPerso
         .collect::<Vec<Result<_, AppError>>>()
         .into_iter()
         .collect()
+}
+
+fn insert_analysis_rows(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    analyses: &[PersonAnalysis],
+) -> Result<(), AppError> {
+    std::thread::scope(|scope| -> Result<(), AppError> {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let producer = scope.spawn(move || {
+            for chunk in analyses.chunks(SAVE_PREPARE_CHUNK_SIZE) {
+                let prepared = prepare_person_chunk(chunk);
+                let stop = prepared.is_err();
+                if sender.send(prepared).is_err() || stop {
+                    break;
+                }
+            }
+        });
+        let consumer_result = (|| -> Result<(), AppError> {
+            for prepared_people in receiver {
+                let prepared_people = prepared_people?;
+                insert_person_batches(transaction, session_id, &prepared_people)?;
+                insert_alert_batches(transaction, session_id, &prepared_people)?;
+                insert_person_hotel_batches(transaction, session_id, &prepared_people)?;
+                insert_person_hotel_region_batches(transaction, session_id, &prepared_people)?;
+            }
+            Ok(())
+        })();
+        producer
+            .join()
+            .map_err(|_| AppError::Storage("people preparation worker panicked".into()))?;
+        consumer_result
+    })
+}
+
+fn insert_people_search_index(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+) -> Result<(), AppError> {
+    // `people.rowid` is the only valid FTS rowid; person_key is session-local and
+    // cannot safely stand in for it.
+    transaction
+        .execute(
+            "INSERT INTO people_search_fts_v2(rowid, search_text) \
+             SELECT rowid, search_text FROM people \
+             WHERE session_id = ?1",
+            [session_id],
+        )
+        .map_err(sql_error)?;
+    Ok(())
 }
 
 fn insert_record_batches(
@@ -2089,6 +2182,12 @@ mod tests {
     use std::time::Instant;
     use uuid::Uuid;
 
+    type RecordStorageSnapshot = (
+        Vec<(i64, i64, Vec<u8>)>,
+        Vec<i64>,
+        Vec<(String, String, i64)>,
+    );
+
     fn test_store() -> (PathBuf, SessionStore) {
         let root = std::env::temp_dir().join(format!("maiyin-storage-{}", Uuid::new_v4()));
         let store = SessionStore::open(root.clone()).unwrap();
@@ -2189,6 +2288,98 @@ mod tests {
             gender: "男".into(),
             issues: vec![],
         }
+    }
+
+    fn analyzed_session(records: Vec<Record>) -> StoredSession {
+        let (analyses, stats) = analyze_records(&records, &AnalysisSettings::default());
+        StoredSession {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            session_id: "session-1".into(),
+            file_name: "analysis.xlsx".into(),
+            imported_at: "2026-07-23T10:00:00+08:00".into(),
+            file_count: 1,
+            settings: AnalysisSettings::default(),
+            import_stats: ImportStats {
+                imported: records.len(),
+                ..Default::default()
+            },
+            records,
+            analyses,
+            stats,
+            source_session_ids: vec![],
+            is_combined: false,
+        }
+    }
+
+    fn reanalysis_benchmark_session(people_count: usize, records_count: usize) -> StoredSession {
+        let mut records = Vec::with_capacity(records_count);
+        for index in 0..records_count {
+            let person_index = index % people_count.max(1);
+            let mut record = sample_record(
+                u64::try_from(index + 1).unwrap_or(u64::MAX),
+                Some(u32::try_from(index % 28 + 1).unwrap_or(1)),
+            );
+            record.person_key = format!("id:{person_index:018}");
+            record.name = format!("人员{person_index:09}");
+            record.id_no = format!("{person_index:018}");
+            record.hotel_name = format!("旅馆{}", index % 5);
+            record.room_no = format!("{}", 300 + index % 20);
+            records.push(record);
+        }
+        let mut session = analyzed_session(records);
+        session.session_id = "reanalyze-benchmark".into();
+        session.file_name = "reanalyze-benchmark.csv".into();
+        session.file_count = 15;
+        session
+    }
+
+    fn record_storage_snapshot(store: &SessionStore, session_id: &str) -> RecordStorageSnapshot {
+        let connection = store.connection().unwrap();
+        let records = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT rowid, uid, record_json FROM records \
+                     WHERE session_id = ?1 ORDER BY rowid",
+                )
+                .unwrap();
+            statement
+                .query_map([session_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let record_fts_rowids = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT rowid FROM records_search_fts_v2 WHERE rowid IN (
+                        SELECT rowid FROM records WHERE session_id = ?1
+                     ) ORDER BY rowid",
+                )
+                .unwrap();
+            statement
+                .query_map([session_id], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let filter_counts = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT filter_kind, value_norm, record_count FROM record_filter_counts \
+                     WHERE session_id = ?1 ORDER BY filter_kind, value_norm",
+                )
+                .unwrap();
+            statement
+                .query_map([session_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        (records, record_fts_rowids, filter_counts)
     }
 
     fn query() -> PersonQuery {
@@ -3176,6 +3367,223 @@ mod tests {
         assert_eq!(restored.file_name, "test.xlsx");
         assert_eq!(store.query_people("session-1", &query()).unwrap().total, 1);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn records_only_load_does_not_decode_stale_analysis_payloads() {
+        let (root, store) = test_store();
+        store.save(&sample_session()).unwrap();
+        let connection = store.connection().unwrap();
+        connection
+            .execute(
+                "UPDATE people SET summary_json = x'00' WHERE session_id = 'session-1'",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let (metadata, records) = store.load_records("session-1").unwrap();
+        assert_eq!(metadata.session_id, "session-1");
+        assert_eq!(records.len(), 1);
+        assert!(store.load("session-1").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replacing_analysis_preserves_records_and_record_indexes() {
+        let (root, store) = test_store();
+        let session = analyzed_session(vec![sample_record(1, Some(1)), sample_record(2, Some(2))]);
+        store.save(&session).unwrap();
+        let before_storage = record_storage_snapshot(&store, "session-1");
+
+        let settings = AnalysisSettings {
+            frequency_mode: FrequencyMode::Selected,
+            frequency_start: chrono::NaiveDate::from_ymd_opt(2026, 7, 2)
+                .unwrap()
+                .and_hms_opt(0, 0, 0),
+            frequency_end: chrono::NaiveDate::from_ymd_opt(2026, 7, 2)
+                .unwrap()
+                .and_hms_opt(23, 59, 59),
+            ..Default::default()
+        };
+        let (mut analyses, stats) = analyze_records(&session.records, &settings);
+        analyses[0].summary.name = "替换姓名".into();
+        store
+            .replace_analysis(
+                "session-1",
+                CURRENT_SCHEMA_VERSION,
+                &settings,
+                &analyses,
+                &stats,
+            )
+            .unwrap();
+
+        assert_eq!(record_storage_snapshot(&store, "session-1"), before_storage);
+        let loaded = store.load("session-1").unwrap();
+        assert_eq!(
+            serde_json::to_value(&loaded.settings).unwrap(),
+            serde_json::to_value(&settings).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&loaded.stats).unwrap(),
+            serde_json::to_value(&stats).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&loaded.analyses).unwrap(),
+            serde_json::to_value(&analyses).unwrap()
+        );
+        assert_eq!(loaded.records.len(), 2);
+
+        let mut old_name_query = query();
+        old_name_query.search = "测试人员2".into();
+        assert_eq!(
+            store
+                .query_people("session-1", &old_name_query)
+                .unwrap()
+                .total,
+            0
+        );
+        let mut new_name_query = query();
+        new_name_query.search = "替换姓名".into();
+        assert_eq!(
+            store
+                .query_people("session-1", &new_name_query)
+                .unwrap()
+                .total,
+            1
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_analysis_replacement_rolls_back_the_previous_analysis() {
+        let (root, store) = test_store();
+        let session = analyzed_session(vec![sample_record(1, Some(1)), sample_record(2, Some(2))]);
+        store.save(&session).unwrap();
+        let before = serde_json::to_value(store.load("session-1").unwrap()).unwrap();
+        let before_storage = record_storage_snapshot(&store, "session-1");
+
+        let mut invalid_analyses = session.analyses.clone();
+        invalid_analyses.push(invalid_analyses[0].clone());
+        let changed_settings = AnalysisSettings {
+            week_threshold: 1,
+            ..Default::default()
+        };
+        assert!(store
+            .replace_analysis(
+                "session-1",
+                CURRENT_SCHEMA_VERSION,
+                &changed_settings,
+                &invalid_analyses,
+                &session.stats,
+            )
+            .is_err());
+
+        assert_eq!(
+            serde_json::to_value(store.load("session-1").unwrap()).unwrap(),
+            before
+        );
+        assert_eq!(record_storage_snapshot(&store, "session-1"), before_storage);
+        let mut search = query();
+        search.search = "测试人员1".into();
+        assert_eq!(store.query_people("session-1", &search).unwrap().total, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "synthetic full-save versus analysis-only reanalysis benchmark"]
+    fn benchmark_analysis_only_replacement() {
+        let people_count = std::env::var("MAIYIN_REANALYSIS_BENCH_PEOPLE")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(20_000);
+        let records_count = std::env::var("MAIYIN_REANALYSIS_BENCH_RECORDS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(25_000)
+            .max(people_count);
+        let session = reanalysis_benchmark_session(people_count, records_count);
+        let (full_root, full_store) = test_store();
+        let (partial_root, partial_store) = test_store();
+        full_store.save(&session).unwrap();
+        partial_store.save(&session).unwrap();
+        let settings = AnalysisSettings {
+            week_threshold: 2,
+            month_threshold: 8,
+            year_threshold: 100,
+            ..Default::default()
+        };
+
+        let full_total_started = Instant::now();
+        let full_load_started = Instant::now();
+        let mut full_session = full_store.load(&session.session_id).unwrap();
+        let full_load_elapsed = full_load_started.elapsed();
+        let full_analysis_started = Instant::now();
+        let (full_analyses, full_stats) = analyze_records(&full_session.records, &settings);
+        let full_analysis_elapsed = full_analysis_started.elapsed();
+        full_session.schema_version = CURRENT_SCHEMA_VERSION;
+        full_session.settings = settings.clone();
+        full_session.analyses = full_analyses;
+        full_session.stats = full_stats;
+        let full_persist_started = Instant::now();
+        full_store.save(&full_session).unwrap();
+        let full_persist_elapsed = full_persist_started.elapsed();
+        let full_total_elapsed = full_total_started.elapsed();
+
+        let partial_total_started = Instant::now();
+        let partial_load_started = Instant::now();
+        let (_, records) = partial_store.load_records(&session.session_id).unwrap();
+        let partial_load_elapsed = partial_load_started.elapsed();
+        let partial_analysis_started = Instant::now();
+        let (partial_analyses, partial_stats) = analyze_records(&records, &settings);
+        let partial_analysis_elapsed = partial_analysis_started.elapsed();
+        let partial_persist_started = Instant::now();
+        partial_store
+            .replace_analysis(
+                &session.session_id,
+                CURRENT_SCHEMA_VERSION,
+                &settings,
+                &partial_analyses,
+                &partial_stats,
+            )
+            .unwrap();
+        let partial_persist_elapsed = partial_persist_started.elapsed();
+        let partial_total_elapsed = partial_total_started.elapsed();
+
+        let full_result = full_store.load(&session.session_id).unwrap();
+        let partial_result = partial_store.load(&session.session_id).unwrap();
+        assert_eq!(
+            serde_json::to_value(&full_result.settings).unwrap(),
+            serde_json::to_value(&partial_result.settings).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&full_result.stats).unwrap(),
+            serde_json::to_value(&partial_result.stats).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&full_result.analyses).unwrap(),
+            serde_json::to_value(&partial_result.analyses).unwrap()
+        );
+        let reduction = if full_total_elapsed.is_zero() {
+            0.0
+        } else {
+            (1.0 - partial_total_elapsed.as_secs_f64() / full_total_elapsed.as_secs_f64()) * 100.0
+        };
+        println!(
+            "reanalyze_benchmark records={} people={} full_load_ms={} full_analysis_ms={} full_persist_ms={} full_total_ms={} load_records_ms={} analysis_ms={} persist_analysis_ms={} total_ms={} reduction_percent={reduction:.1}",
+            records_count,
+            people_count,
+            full_load_elapsed.as_millis(),
+            full_analysis_elapsed.as_millis(),
+            full_persist_elapsed.as_millis(),
+            full_total_elapsed.as_millis(),
+            partial_load_elapsed.as_millis(),
+            partial_analysis_elapsed.as_millis(),
+            partial_persist_elapsed.as_millis(),
+            partial_total_elapsed.as_millis(),
+        );
+        fs::remove_dir_all(full_root).unwrap();
+        fs::remove_dir_all(partial_root).unwrap();
     }
 
     #[test]
