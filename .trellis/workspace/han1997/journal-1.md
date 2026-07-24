@@ -768,3 +768,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: 拆分 parse_file 为定起始+列映射与逐行构造
+
+**Date**: 2026-07-24
+**Task**: 拆分 parse_file 为定起始+列映射与逐行构造
+**Branch**: `main`
+
+### Summary
+
+将 parse_file ~115 行拆为 resolve_data_start_and_indexes（三段式分派）、build_record（逐行抽取+Record 构造，返回 RowOutcome 枚举）、parse_file（编排+stats 累积）。RowOutcome 四变体干净处理 stats 副作用。analysis_regression_checksum 测试守卫字节级一致。质量门全绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1c65f0d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
