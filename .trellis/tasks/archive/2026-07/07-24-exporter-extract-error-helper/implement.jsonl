@@ -1,0 +1,1 @@
+{"file": ".trellis/tasks/archive/2026-07/07-24-repo-code-audit/audit-report.md", "reason": "P3 #13: exporter.rs 14 duplicated map_err closures, suggested export_error helper"}`n
