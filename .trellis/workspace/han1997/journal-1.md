@@ -834,3 +834,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 26: 去重前端 filter 编排
+
+**Date**: 2026-07-24
+**Task**: 去重前端 filter 编排
+**Branch**: `main`
+
+### Summary
+
+抽取 prepareFilters（5 组派生值）+ buildPersonPredicate + buildRecordPredicate 中心化编排。filterPeople 和 recordMatchesImportedFilter 只做调用与分页。删除仅作透传的 splitHotelKeywords 包装。hotel keywords/region 因数组 vs 单值结构差异保持各自内联。23 个前端测试守卫行为不变。质量门全绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0821c40` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
