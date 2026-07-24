@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite 筛选语义契约：per-field OR / cross-field AND / FTS rowid / EXISTS 包裹，抽取不得违反"}
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "PersonQuery/ImportedRecordsQuery DTO 边界，确认抽取不改 query 字段消费"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量约定与禁用模式"}
+{"file": ".trellis/tasks/archive/2026-07/07-24-repo-code-audit/audit-report.md", "reason": "审计报告 P2 #5，两个 filter 构建器重复的来源与抽取建议"}

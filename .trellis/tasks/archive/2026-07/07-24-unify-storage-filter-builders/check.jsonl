@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验证抽取后筛选语义契约（per-field OR / cross-field AND / FTS rowid）未变"}
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "验证 query DTO 消费未变"}
