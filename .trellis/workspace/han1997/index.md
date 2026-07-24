@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 29
-- **Last Active**: 2026-07-24
+- **Total Sessions**: 30
+- **Last Active**: 2026-07-25
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~968 | Active |
+| `journal-1.md` | ~1001 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 30 | 2026-07-25 | importer 静态正则 unwrap 改 expect | `b21020b` | `main` |
 | 29 | 2026-07-24 | 合并 activeExtraFilterCount 与 activeRecordsFilterCount | `91b4dfb` | `main` |
 | 28 | 2026-07-24 | 清理 browserApi toImportedStayRecord 字段裁剪 | `4f3609d` | `main` |
 | 27 | 2026-07-24 | 抽取 export_error helper 收敛重复 map_err | `2590844` | `main` |

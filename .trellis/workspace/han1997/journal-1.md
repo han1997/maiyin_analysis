@@ -966,3 +966,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 30: importer 静态正则 unwrap 改 expect
+
+**Date**: 2026-07-25
+**Task**: importer 静态正则 unwrap 改 expect
+**Branch**: `main`
+
+### Summary
+
+2 处 OnceLock 内 Regex::new(...).unwrap() 改为 .expect(static regex pattern is valid)，降低误改即 panic 风险。行为不变。质量门全绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b21020b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
