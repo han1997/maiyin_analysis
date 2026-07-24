@@ -155,7 +155,7 @@ pub async fn merge_sessions(
             short_stay_count += metadata.import_stats.short_stay_count;
             missing_id_count += metadata.import_stats.missing_id_count;
             for mut record in records {
-                let key = record_key(&record);
+                let key = importer::deduplication_key(&record);
                 if !seen.insert(key) {
                     duplicate_count += 1;
                     continue;
@@ -434,28 +434,6 @@ fn task_error(error: impl std::fmt::Display) -> CommandError {
         code: "task_error",
         message: error.to_string(),
     }
-}
-
-fn record_key(record: &crate::model::Record) -> String {
-    [
-        record.id_no.clone(),
-        record.hotel_name.clone(),
-        record.province.clone(),
-        record.city.clone(),
-        record.county.clone(),
-        record.region.clone(),
-        record.address.clone(),
-        record.room_no.clone(),
-        command_date_key(record.check_in, &record.check_in_text),
-        command_date_key(record.check_out, &record.check_out_text),
-    ]
-    .join("\u{1f}")
-}
-
-fn command_date_key(value: Option<chrono::NaiveDateTime>, raw: &str) -> String {
-    value
-        .map(|item| format!("dt:{}", item.format("%Y-%m-%dT%H:%M:%S")))
-        .unwrap_or_else(|| format!("raw:{}", raw.trim()))
 }
 
 #[derive(Serialize, Deserialize)]

@@ -52,7 +52,7 @@ struct ParsedFile {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-struct DeduplicationKey {
+pub(crate) struct DeduplicationKey {
     id_no: String,
     hotel_name: String,
     province: String,
@@ -66,7 +66,7 @@ struct DeduplicationKey {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-enum DateKey {
+pub(crate) enum DateKey {
     Parsed(NaiveDateTime),
     Raw(String),
 }
@@ -797,7 +797,7 @@ fn normalize_gender(value: &str, id_no: &str) -> String {
         .unwrap_or_default()
 }
 
-fn deduplication_key(record: &Record) -> DeduplicationKey {
+pub(crate) fn deduplication_key(record: &Record) -> DeduplicationKey {
     DeduplicationKey {
         id_no: record.id_no.clone(),
         hotel_name: record.hotel_name.clone(),
@@ -812,7 +812,7 @@ fn deduplication_key(record: &Record) -> DeduplicationKey {
     }
 }
 
-fn date_key(parsed: Option<NaiveDateTime>, raw: &str) -> DateKey {
+pub(crate) fn date_key(parsed: Option<NaiveDateTime>, raw: &str) -> DateKey {
     parsed
         .map(DateKey::Parsed)
         .unwrap_or_else(|| DateKey::Raw(raw.trim().to_string()))
