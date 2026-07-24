@@ -7,32 +7,14 @@ pub(crate) fn build_person_filter(session_id: &str, query: &PersonQuery) -> (Str
     let mut clauses = vec!["p.session_id = ?".to_string()];
     let mut values = vec![Value::Text(session_id.to_string())];
 
-    let search = normalize(&query.search);
-    if !search.is_empty() {
-        if search.chars().count() >= 3 {
-            // Fast path: FTS5 trigram MATCH (prefix/substring for ≥3 chars).
-            // Quote the query to avoid FTS5 boolean parsing. We use `rowid IN (...)`
-            // rather than `EXISTS (... fts.rowid = p.rowid ...)` so the planner drives
-            // the FTS5 doclist (a small candidate set) and joins to people on rowid —
-            // the EXISTS form forced a people scan with a per-row MATCH eval.
-            clauses.push(
-                "p.rowid IN (
-                    SELECT rowid FROM people_search_fts WHERE people_search_fts MATCH ?
-                    UNION
-                    SELECT rowid FROM people_search_fts_v2 WHERE people_search_fts_v2 MATCH ?
-                 ) \
-                 AND p.search_text LIKE ? ESCAPE '\\'"
-                    .into(),
-            );
-            values.push(Value::Text(fts_trigram_query(&search)));
-            values.push(Value::Text(fts_trigram_query(&search)));
-            values.push(Value::Text(contains_pattern(&search)));
-        } else {
-            // Fallback for ≤2-char queries: trigram tokenizer floor; LIKE contains stays correct.
-            clauses.push("p.search_text LIKE ? ESCAPE '\\'".into());
-            values.push(Value::Text(contains_pattern(&search)));
-        }
-    }
+    push_search_filter(
+        &mut clauses,
+        &mut values,
+        &query.search,
+        &[("people_search_fts", "people_search_fts_v2")],
+        "p.rowid",
+        "p.search_text",
+    );
     if !query.level.trim().is_empty() && query.level != "全部等级" {
         clauses.push("p.level = ?".into());
         values.push(Value::Text(query.level.clone()));
@@ -42,18 +24,14 @@ pub(crate) fn build_person_filter(session_id: &str, query: &PersonQuery) -> (Str
         "未预警人员" => clauses.push("p.alert_count = 0".into()),
         _ => {}
     }
-    if let Some(min_age) = query.min_age {
-        clauses.push("p.age >= ?".into());
-        values.push(Value::Integer(i64_from_usize(min_age)));
-    }
-    if let Some(max_age) = query.max_age {
-        clauses.push("p.age <= ?".into());
-        values.push(Value::Integer(i64_from_usize(max_age)));
-    }
-    if !query.gender.trim().is_empty() {
-        clauses.push("p.gender = ?".into());
-        values.push(Value::Text(query.gender.clone()));
-    }
+    push_age_filter(
+        &mut clauses,
+        &mut values,
+        query.min_age,
+        query.max_age,
+        "p.age",
+    );
+    push_gender_filter(&mut clauses, &mut values, &query.gender, "p.gender");
 
     for hotel in split_hotel_terms(&query.hotel_search) {
         // Hotel-name fuzzy match is ordered-subsequence (`%a%b%c%`), NOT substring
@@ -90,47 +68,22 @@ pub(crate) fn build_person_filter(session_id: &str, query: &PersonQuery) -> (Str
         ));
     }
 
-    // Household include filters use OR within one split field and AND across fields.
-    let household_splits = [
-        (
-            "p.household_province_norm",
-            split_filter_terms(&query.household_province),
-        ),
-        (
-            "p.household_city_norm",
-            split_filter_terms(&query.household_city),
-        ),
-        (
-            "p.household_county_norm",
-            split_filter_terms(&query.household_county),
-        ),
-    ];
-    for (column, terms) in household_splits {
-        if let Some(clause) = contains_any_clause(column, &terms, &mut values) {
-            clauses.push(clause);
-        }
-    }
-    let excluded = [
-        (
-            "p.household_province_norm",
-            split_filter_terms(&query.exclude_household_province),
-        ),
-        (
-            "p.household_city_norm",
-            split_filter_terms(&query.exclude_household_city),
-        ),
-        (
-            "p.household_county_norm",
-            split_filter_terms(&query.exclude_household_county),
-        ),
-    ];
-    let excluded_clauses = excluded
-        .iter()
-        .filter_map(|(column, terms)| contains_any_clause(column, terms, &mut values))
-        .collect::<Vec<_>>();
-    if !excluded_clauses.is_empty() {
-        clauses.push(format!("NOT ({})", excluded_clauses.join(" OR ")));
-    }
+    push_household_include_filter(
+        &mut clauses,
+        &mut values,
+        &query.household_province,
+        &query.household_city,
+        &query.household_county,
+        "p.",
+    );
+    push_household_exclude_filter(
+        &mut clauses,
+        &mut values,
+        &query.exclude_household_province,
+        &query.exclude_household_city,
+        &query.exclude_household_county,
+        "p.",
+    );
     (clauses.join(" AND "), values)
 }
 
@@ -155,40 +108,22 @@ pub(crate) fn build_records_filter(
         }
     }
 
-    let search = normalize(&query.search);
-    if !search.is_empty() {
-        if search.chars().count() >= 3 {
-            // FTS5 trigram MATCH: indexed substring for ≥3 chars. rowid-in-subselect
-            // drives the FTS5 doclist; ON-clause on rowid drives a seek into records.
-            clauses.push(
-                "rowid IN (
-                    SELECT rowid FROM records_search_fts WHERE records_search_fts MATCH ?
-                    UNION
-                    SELECT rowid FROM records_search_fts_v2 WHERE records_search_fts_v2 MATCH ?
-                 ) \
-                 AND search_text LIKE ? ESCAPE '\\'"
-                    .into(),
-            );
-            values.push(Value::Text(fts_trigram_query(&search)));
-            values.push(Value::Text(fts_trigram_query(&search)));
-            values.push(Value::Text(contains_pattern(&search)));
-        } else {
-            clauses.push("search_text LIKE ? ESCAPE '\\'".into());
-            values.push(Value::Text(contains_pattern(&search)));
-        }
-    }
-    if let Some(min_age) = query.min_age {
-        clauses.push("age >= ?".into());
-        values.push(Value::Integer(i64_from_usize(min_age)));
-    }
-    if let Some(max_age) = query.max_age {
-        clauses.push("age <= ?".into());
-        values.push(Value::Integer(i64_from_usize(max_age)));
-    }
-    if !query.gender.trim().is_empty() {
-        clauses.push("gender = ?".into());
-        values.push(Value::Text(query.gender.clone()));
-    }
+    push_search_filter(
+        &mut clauses,
+        &mut values,
+        &query.search,
+        &[("records_search_fts", "records_search_fts_v2")],
+        "rowid",
+        "search_text",
+    );
+    push_age_filter(
+        &mut clauses,
+        &mut values,
+        query.min_age,
+        query.max_age,
+        "age",
+    );
+    push_gender_filter(&mut clauses, &mut values, &query.gender, "gender");
 
     for hotel in split_hotel_terms(&query.hotel_search) {
         // Records hotel-name filter uses ordered-subsequence `fuzzy_pattern`; trigram
@@ -213,49 +148,170 @@ pub(crate) fn build_records_filter(
         }
     }
 
-    // Household include filters use the same split-field semantics as people queries.
+    push_household_include_filter(
+        &mut clauses,
+        &mut values,
+        &query.household_province,
+        &query.household_city,
+        &query.household_county,
+        "",
+    );
+    push_household_exclude_filter(
+        &mut clauses,
+        &mut values,
+        &query.exclude_household_province,
+        &query.exclude_household_city,
+        &query.exclude_household_county,
+        "",
+    );
+
+    (clauses.join(" AND "), values)
+}
+
+/// Free-text search filter shared by people and records queries.
+///
+/// For normalized values of three or more characters the FTS5 trigram MATCH drives
+/// the candidate set (a small doclist) and a source-table `LIKE` confirms exact
+/// substring semantics; one- and two-character queries keep the direct `LIKE`
+/// fallback because the trigram tokenizer cannot index them.
+fn push_search_filter(
+    clauses: &mut Vec<String>,
+    values: &mut Vec<Value>,
+    search: &str,
+    fts_tables: &[(&str, &str)],
+    rowid_column: &str,
+    search_column: &str,
+) {
+    let normalized = normalize(search);
+    if normalized.is_empty() {
+        return;
+    }
+    if normalized.chars().count() >= 3 {
+        // Quote the query to avoid FTS5 boolean parsing. We use `rowid IN (...)`
+        // rather than `EXISTS (... fts.rowid = source.rowid ...)` so the planner
+        // drives the FTS5 doclist (a small candidate set) and joins to the source
+        // table on rowid — the EXISTS form forced a source scan with a per-row
+        // MATCH eval.
+        let (old_fts, new_fts) = fts_tables[0];
+        clauses.push(format!(
+            "{rowid_column} IN (
+                    SELECT rowid FROM {old_fts} WHERE {old_fts} MATCH ?
+                    UNION
+                    SELECT rowid FROM {new_fts} WHERE {new_fts} MATCH ?
+                 ) \
+                 AND {search_column} LIKE ? ESCAPE '\\'"
+        ));
+        values.push(Value::Text(fts_trigram_query(&normalized)));
+        values.push(Value::Text(fts_trigram_query(&normalized)));
+        values.push(Value::Text(contains_pattern(&normalized)));
+    } else {
+        // Fallback for ≤2-char queries: trigram tokenizer floor; LIKE contains stays correct.
+        clauses.push(format!("{search_column} LIKE ? ESCAPE '\\'"));
+        values.push(Value::Text(contains_pattern(&normalized)));
+    }
+}
+
+/// Age range filter shared by people and records queries.
+fn push_age_filter(
+    clauses: &mut Vec<String>,
+    values: &mut Vec<Value>,
+    min_age: Option<usize>,
+    max_age: Option<usize>,
+    age_column: &str,
+) {
+    if let Some(min_age) = min_age {
+        clauses.push(format!("{age_column} >= ?"));
+        values.push(Value::Integer(i64_from_usize(min_age)));
+    }
+    if let Some(max_age) = max_age {
+        clauses.push(format!("{age_column} <= ?"));
+        values.push(Value::Integer(i64_from_usize(max_age)));
+    }
+}
+
+/// Gender equality filter shared by people and records queries.
+fn push_gender_filter(
+    clauses: &mut Vec<String>,
+    values: &mut Vec<Value>,
+    gender: &str,
+    gender_column: &str,
+) {
+    if !gender.trim().is_empty() {
+        clauses.push(format!("{gender_column} = ?"));
+        values.push(Value::Text(gender.to_string()));
+    }
+}
+
+/// Household include filter shared by people and records queries.
+///
+/// Each split field uses OR within the field; populated province/city/county
+/// fields combine with AND. `column_prefix` is `"p."` for people queries and
+/// `""` for records queries.
+fn push_household_include_filter(
+    clauses: &mut Vec<String>,
+    values: &mut Vec<Value>,
+    household_province: &str,
+    household_city: &str,
+    household_county: &str,
+    column_prefix: &str,
+) {
+    // Household include filters use OR within one split field and AND across fields.
     let household_splits = [
         (
-            "household_province_norm",
-            split_filter_terms(&query.household_province),
+            format!("{column_prefix}household_province_norm"),
+            split_filter_terms(household_province),
         ),
         (
-            "household_city_norm",
-            split_filter_terms(&query.household_city),
+            format!("{column_prefix}household_city_norm"),
+            split_filter_terms(household_city),
         ),
         (
-            "household_county_norm",
-            split_filter_terms(&query.household_county),
+            format!("{column_prefix}household_county_norm"),
+            split_filter_terms(household_county),
         ),
     ];
     for (column, terms) in household_splits {
-        if let Some(clause) = contains_any_clause(column, &terms, &mut values) {
+        if let Some(clause) = contains_any_clause(&column, &terms, values) {
             clauses.push(clause);
         }
     }
+}
+
+/// Household exclude filter shared by people and records queries.
+///
+/// Each split field builds a `contains_any_clause`; the collected clauses are
+/// joined with `OR` and negated as `NOT (...)`, so a row matching any populated
+/// exclusion field is excluded. `column_prefix` is `"p."` for people queries
+/// and `""` for records queries.
+fn push_household_exclude_filter(
+    clauses: &mut Vec<String>,
+    values: &mut Vec<Value>,
+    exclude_household_province: &str,
+    exclude_household_city: &str,
+    exclude_household_county: &str,
+    column_prefix: &str,
+) {
     let excluded = [
         (
-            "household_province_norm",
-            split_filter_terms(&query.exclude_household_province),
+            format!("{column_prefix}household_province_norm"),
+            split_filter_terms(exclude_household_province),
         ),
         (
-            "household_city_norm",
-            split_filter_terms(&query.exclude_household_city),
+            format!("{column_prefix}household_city_norm"),
+            split_filter_terms(exclude_household_city),
         ),
         (
-            "household_county_norm",
-            split_filter_terms(&query.exclude_household_county),
+            format!("{column_prefix}household_county_norm"),
+            split_filter_terms(exclude_household_county),
         ),
     ];
     let excluded_clauses = excluded
         .iter()
-        .filter_map(|(column, terms)| contains_any_clause(column, terms, &mut values))
+        .filter_map(|(column, terms)| contains_any_clause(column, terms, values))
         .collect::<Vec<_>>();
     if !excluded_clauses.is_empty() {
         clauses.push(format!("NOT ({})", excluded_clauses.join(" OR ")));
     }
-
-    (clauses.join(" AND "), values)
 }
 
 pub(crate) fn records_count_source(query: &ImportedRecordsQuery) -> &'static str {
