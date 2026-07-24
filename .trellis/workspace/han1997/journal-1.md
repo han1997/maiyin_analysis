@@ -669,3 +669,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: 拆分 App.tsx 子组件与辅助函数外移
+
+**Date**: 2026-07-24
+**Task**: 拆分 App.tsx 子组件与辅助函数外移
+**Branch**: `main`
+
+### Summary
+
+将 App.tsx(1039行)的 11 个内联子组件外移到 src/components/、7 个辅助函数外移到 src/lib/appHelpers.ts，纯机械搬移零行为变更。App.tsx 降至 769 行。三道门全绿：lint 零告警、test 23 用例全过、build 通过(41 模块)。trellis-implement 子代理一次成功完成。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b9f9690` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 20
+- **Total Sessions**: 21
 - **Last Active**: 2026-07-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~671 | Active |
+| `journal-1.md` | ~704 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 21 | 2026-07-24 | 拆分 App.tsx 子组件与辅助函数外移 | `b9f9690` | `main` |
 | 20 | 2026-07-24 | 拆分 storage.rs 按职责分模块 | `72dcc17` | `main` |
 | 19 | 2026-07-24 | 全仓代码体检与优化 | `a71fbc7` | `main` |
 | 18 | 2026-07-23 | 优化数据分析性能 | `329023b` | `main` |
