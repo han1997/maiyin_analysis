@@ -22,21 +22,37 @@ export function analysisTimeScopeLabel(settings: AnalysisSettings): string {
   return `${start} 至 ${end}`;
 }
 
-export function activeExtraFilterCount(query: PersonQuery): number {
-  return Number(splitFilterTerms(query.hotelSearch ?? "").length > 0)
-    + activeDelimitedFieldCount([query.hotelProvince, query.hotelCity, query.hotelCounty])
-    + activeDelimitedFieldCount([query.householdProvince, query.householdCity, query.householdCounty])
-    + activeDelimitedFieldCount([query.excludeHouseholdProvince, query.excludeHouseholdCity, query.excludeHouseholdCounty])
-    + Number(query.minAge != null || query.maxAge != null || Boolean(query.gender))
-    + Number((query.alertState ?? "全部人员") !== "全部人员");
+interface FilterCountQuery {
+  hotelSearch?: string;
+  hotelProvince?: string;
+  hotelCity?: string;
+  hotelCounty?: string;
+  householdProvince?: string;
+  householdCity?: string;
+  householdCounty?: string;
+  excludeHouseholdProvince?: string;
+  excludeHouseholdCity?: string;
+  excludeHouseholdCounty?: string;
+  minAge?: number | null;
+  maxAge?: number | null;
+  gender?: string;
 }
 
-export function activeRecordsFilterCount(query: ImportedRecordsQuery): number {
+function activeSharedFilterCount(query: FilterCountQuery): number {
   return Number(splitFilterTerms(query.hotelSearch ?? "").length > 0)
     + activeDelimitedFieldCount([query.hotelProvince, query.hotelCity, query.hotelCounty])
     + activeDelimitedFieldCount([query.householdProvince, query.householdCity, query.householdCounty])
     + activeDelimitedFieldCount([query.excludeHouseholdProvince, query.excludeHouseholdCity, query.excludeHouseholdCounty])
     + Number(query.minAge != null || query.maxAge != null || Boolean(query.gender));
+}
+
+export function activeExtraFilterCount(query: PersonQuery): number {
+  return activeSharedFilterCount(query)
+    + Number((query.alertState ?? "全部人员") !== "全部人员");
+}
+
+export function activeRecordsFilterCount(query: ImportedRecordsQuery): number {
+  return activeSharedFilterCount(query);
 }
 
 export function activeDelimitedFieldCount(values: Array<string | undefined>): number {
