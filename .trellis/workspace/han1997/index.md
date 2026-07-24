@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
+- **Total Sessions**: 25
 - **Last Active**: 2026-07-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~803 | Active |
+| `journal-1.md` | ~836 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 25 | 2026-07-24 | 移除 analysis 生产路径 .expect() | `2964170` | `main` |
 | 24 | 2026-07-24 | 拆分 parse_file 为定起始+列映射与逐行构造 | `1c65f0d` | `main` |
 | 23 | 2026-07-24 | merge_sessions 复用结构化 DeduplicationKey | `8c60291` | `main` |
 | 22 | 2026-07-24 | 统一 storage filter 构建器 | `7305803` | `main` |

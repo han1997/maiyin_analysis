@@ -801,3 +801,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 25: 移除 analysis 生产路径 .expect()
+
+**Date**: 2026-07-24
+**Task**: 移除 analysis 生产路径 .expect()
+**Branch**: `main`
+
+### Summary
+
+移除 different_accommodation_cached 2 处和 day_ranges 2 处 .expect()，改为 entry+let-else/Option/if-let。PRD 修复 1 因 E0499 双重 &mut 借用不可行，改用 get()+let-else return false（防御性死代码）。analysis_regression_checksum 守卫字节级一致。质量门全绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2964170` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
