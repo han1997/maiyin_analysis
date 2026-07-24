@@ -1,8 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { appApi } from "./api";
 import { Icon } from "./components/Icon";
-import { RiskBadge, SeverityBadge } from "./components/RiskBadge";
+import { RiskBadge } from "./components/RiskBadge";
 import { StatStrip } from "./components/StatStrip";
+import { TableSkeleton } from "./components/TableSkeleton";
+import { ImportedRecordsTable } from "./components/ImportedRecordsTable";
+import { PageSizeSelect } from "./components/PageSizeSelect";
+import { DetailInspector } from "./components/DetailInspector";
+import { SettingsPanel } from "./components/SettingsPanel";
+import { Field } from "./components/Field";
+import { NumberField } from "./components/NumberField";
+import { ConfirmDialog } from "./components/ConfirmDialog";
+import { EmptyWorkspace } from "./components/EmptyWorkspace";
+import { LoadingShell } from "./components/LoadingShell";
 import type {
   AnalysisSettings,
   ExportKind,
@@ -15,8 +25,16 @@ import type {
   WorkspaceSnapshot,
 } from "./domain/types";
 import { initialRecordsQuery } from "./domain/types";
-import { splitFilterTerms } from "./lib/filter";
 import { formatDateTime, formatInteger, maskIdentity, maskPhone } from "./lib/format";
+import {
+  activeExtraFilterCount,
+  activeRecordsFilterCount,
+  analysisTimeScopeLabel,
+  errorMessage,
+  frequencyScopeLabel,
+  modeLabel,
+  regionFilterPlaceholder,
+} from "./lib/appHelpers";
 
 type BusyAction = "boot" | "import" | "reanalyze" | "session" | "export" | "delete" | null;
 
@@ -31,8 +49,6 @@ const exportActions: Array<{ kind: ExportKind; label: string }> = [
   { kind: "risk_xlsx", label: "风险合并 Excel" },
   { kind: "raw_csv", label: "规范化原始 CSV" },
 ];
-const pageSizeOptions = [50, 100, 200] as const;
-const regionFilterPlaceholder = "例如：安徽，浙江";
 
 const initialQuery: PersonQuery = {
   search: "",
@@ -748,357 +764,6 @@ function App() {
       {toast && <div className={`toast toast-${toast.tone}`} role="status"><Icon name={toast.tone === "error" ? "warning" : "info"} size={17} /><span>{toast.message}</span><button type="button" aria-label="关闭提示" onClick={() => setToast(null)}><Icon name="close" size={15} /></button></div>}
     </div>
   );
-}
-
-function TableSkeleton({ label = "正在加载人员结果" }: { label?: string }) {
-  return <div className="table-skeleton" role="status" aria-label={label}>{Array.from({ length: 6 }, (_, index) => <span key={index} />)}</div>;
-}
-
-function ImportedRecordsTable({
-  page,
-  loading,
-  showSensitive,
-  timeScoped,
-  totalPages,
-  filterDraft,
-  onFilterDraftChange,
-  onApplyFilters,
-  onClearFilters,
-  activeFilterCount,
-  filterMenuOpen,
-  onFilterMenuToggle,
-  filterMenuRef,
-  filterTriggerRef,
-  onPageChange,
-  onPageSizeChange,
-}: {
-  page: ImportedRecordsPage;
-  loading: boolean;
-  showSensitive: boolean;
-  timeScoped: boolean;
-  totalPages: number;
-  filterDraft: ImportedRecordsQuery;
-  onFilterDraftChange: (updater: (current: ImportedRecordsQuery) => ImportedRecordsQuery) => void;
-  onApplyFilters: () => void;
-  onClearFilters: () => void;
-  activeFilterCount: number;
-  filterMenuOpen: boolean;
-  onFilterMenuToggle: () => void;
-  filterMenuRef: React.RefObject<HTMLDivElement | null>;
-  filterTriggerRef: React.RefObject<HTMLButtonElement | null>;
-  onPageChange: (page: number) => void;
-  onPageSizeChange: (pageSize: number) => void;
-}) {
-  return (
-    <section className="results-region records-region" id="records-panel" role="tabpanel" aria-labelledby="records-tab" aria-label="导入入住记录">
-      <div className="result-toolbar records-toolbar">
-        <div className="records-scope-note">
-          <strong>{timeScoped ? "选定时间范围" : "全部有效入住"}</strong>
-          <span>{timeScoped ? "按入住时间边界筛选" : "未启用时间范围筛选"}</span>
-        </div>
-        <div className="search-field">
-          <Icon name="search" size={17} />
-          <input
-            aria-label="搜索导入记录"
-            placeholder="搜索姓名、证件号、手机号、旅馆或户籍地"
-            value={filterDraft.search}
-            onChange={(event) => onFilterDraftChange((current) => ({ ...current, search: event.target.value }))}
-          />
-          {filterDraft.search && <button type="button" aria-label="清除搜索" onClick={() => onFilterDraftChange((current) => ({ ...current, search: "" }))}><Icon name="close" size={15} /></button>}
-        </div>
-        <button className="button button-primary compact" type="button" onClick={onApplyFilters}>应用筛选</button>
-        <div className="toolbar-menu filter-menu" data-open={filterMenuOpen} ref={filterMenuRef}>
-          <button
-            className="button button-quiet compact toolbar-trigger"
-            type="button"
-            aria-expanded={filterMenuOpen}
-            aria-controls="records-filter-popover"
-            ref={filterTriggerRef}
-            onClick={onFilterMenuToggle}
-          ><Icon name="filter" size={16} /> 更多筛选{activeFilterCount > 0 && <span className="filter-count">{activeFilterCount}</span>}</button>
-          {filterMenuOpen && <div className="toolbar-popover filter-popover" id="records-filter-popover">
-            <section className="filter-group" aria-labelledby="records-hotel-filter-title">
-              <div className="filter-group-heading"><strong id="records-hotel-filter-title">入住旅馆</strong><span>名称多项需全部命中；省市县支持模糊多选</span></div>
-              <label className="field filter-wide-field"><span>旅馆名称</span><input placeholder="例如：旅馆 A，旅馆 B" value={filterDraft.hotelSearch ?? ""} onChange={(event) => onFilterDraftChange((current) => ({ ...current, hotelSearch: event.target.value }))} /></label>
-              <div className="filter-field-grid three">
-                <Field label="旅馆省份" value={filterDraft.hotelProvince ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, hotelProvince: value }))} />
-                <Field label="旅馆城市" value={filterDraft.hotelCity ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, hotelCity: value }))} />
-                <Field label="旅馆县区" value={filterDraft.hotelCounty ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, hotelCounty: value }))} />
-              </div>
-            </section>
-            <section className="filter-group" aria-labelledby="records-household-filter-title">
-              <div className="filter-group-heading"><strong id="records-household-filter-title">人员户籍地</strong><span>省市县支持模糊多选；包含字段间同时满足，排除任一命中即排除</span></div>
-              <div className="filter-subgroup"><span>包含户籍地</span><div className="filter-field-grid three">
-                <Field label="省份" value={filterDraft.householdProvince ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, householdProvince: value }))} />
-                <Field label="城市" value={filterDraft.householdCity ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, householdCity: value }))} />
-                <Field label="县区" value={filterDraft.householdCounty ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, householdCounty: value }))} />
-              </div></div>
-              <div className="filter-subgroup"><span>排除户籍地</span><div className="filter-field-grid three">
-                <Field label="省份" value={filterDraft.excludeHouseholdProvince ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, excludeHouseholdProvince: value }))} />
-                <Field label="城市" value={filterDraft.excludeHouseholdCity ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, excludeHouseholdCity: value }))} />
-                <Field label="县区" value={filterDraft.excludeHouseholdCounty ?? ""} placeholder={regionFilterPlaceholder} onChange={(value) => onFilterDraftChange((current) => ({ ...current, excludeHouseholdCounty: value }))} />
-              </div></div>
-            </section>
-            <section className="filter-group" aria-labelledby="records-person-filter-title">
-              <div className="filter-group-heading"><strong id="records-person-filter-title">人员条件</strong><span>仅筛选结果</span></div>
-              <div className="filter-field-grid three">
-                <NumberField label="最小年龄" value={filterDraft.minAge ?? null} onChange={(value) => onFilterDraftChange((current) => ({ ...current, minAge: value }))} />
-                <NumberField label="最大年龄" value={filterDraft.maxAge ?? null} onChange={(value) => onFilterDraftChange((current) => ({ ...current, maxAge: value }))} />
-                <label className="field"><span>性别</span><select value={filterDraft.gender ?? ""} onChange={(event) => onFilterDraftChange((current) => ({ ...current, gender: event.target.value as ImportedRecordsQuery["gender"] }))}><option value="">不限</option><option>男</option><option>女</option></select></label>
-              </div>
-            </section>
-            <div className="popover-actions"><button className="text-button" type="button" onClick={onClearFilters}>清除全部筛选</button></div>
-          </div>}
-        </div>
-      </div>
-      <div className="table-frame" aria-busy={loading}>
-        <table className="records-table">
-          <thead><tr><th>人员</th><th>旅馆 / 房号</th><th>入住时间</th><th>退房时间</th><th>户籍地</th><th>来源</th><th>数据状态</th></tr></thead>
-          <tbody>{page.items.map((record) => (
-            <tr key={record.uid}>
-              <td title={`${record.name} ${record.idNo} ${record.phone}`}><strong>{record.name || "未填"}</strong><small>{showSensitive ? record.idNo : maskIdentity(record.idNo)} · {showSensitive ? record.phone : maskPhone(record.phone)}</small></td>
-              <td title={`${record.hotelName} ${record.address}`}><span className="primary-cell-text">{record.hotelName || "未填旅馆"}</span><small>房号 {record.roomNo || "未填"}</small></td>
-              <td className="numeric" title={record.checkIn}>{record.checkIn || "未识别"}</td>
-              <td className="numeric" title={record.checkOut}>{record.checkOut || "未退房"}</td>
-              <td title={record.householdRegion}>{record.householdRegion || "未识别"}</td>
-              <td title={record.sourceFile}>{record.sourceFile}<small>第 {record.sourceRow} 行</small></td>
-              <td>{record.issues.length ? <span className="issue-tag" title={record.issues.join("；")}>{record.issues.length} 项问题</span> : <span className="record-ok">正常</span>}</td>
-            </tr>
-          ))}</tbody>
-        </table>
-        {loading && page.items.length === 0 ? <TableSkeleton label="正在加载导入记录" /> : page.items.length === 0 && <div className="no-results"><Icon name="file" size={22} /><strong>{timeScoped ? "当前选定时间范围内没有入住记录" : "当前会话没有有效入住记录"}</strong><span>{timeScoped ? "可调整分析时间范围或筛选条件后重试。" : "请检查导入文件中的入住时间字段或调整筛选条件。"}</span></div>}
-      </div>
-      <footer className="table-footer">
-        <div className="page-summary"><span>共 {formatInteger(page.total)} 条</span><PageSizeSelect label="导入记录每页数量" unit="条" value={filterDraft.pageSize} onChange={onPageSizeChange} /></div>
-        <div className="pagination">
-          <button className="icon-button" type="button" aria-label="导入记录上一页" disabled={loading || page.page <= 1} onClick={() => onPageChange(page.page - 1)}><Icon name="chevronLeft" /></button>
-          <span>第 {page.page} / {totalPages} 页</span>
-          <button className="icon-button" type="button" aria-label="导入记录下一页" disabled={loading || page.page >= totalPages} onClick={() => onPageChange(page.page + 1)}><Icon name="chevronRight" /></button>
-        </div>
-      </footer>
-    </section>
-  );
-}
-
-function PageSizeSelect({ label, unit, value, onChange }: { label: string; unit: string; value: number; onChange: (value: number) => void }) {
-  return (
-    <label className="page-size-control">
-      <span>每页</span>
-      <select aria-label={label} value={value} onChange={(event) => onChange(Number(event.target.value))}>
-        {pageSizeOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-      </select>
-      <span>{unit}</span>
-    </label>
-  );
-}
-
-function DetailInspector({ detail, loading, showSensitive, maximized, selectedAlertIndex, onClose, onToggleMaximize, onSelectAlert, onClearAlertFilter }: {
-  detail: PersonDetail | null;
-  loading: boolean;
-  showSensitive: boolean;
-  maximized: boolean;
-  selectedAlertIndex: number | null;
-  onClose: () => void;
-  onToggleMaximize: () => void;
-  onSelectAlert: (index: number) => void;
-  onClearAlertFilter: () => void;
-}) {
-  const filteredEvidence = (() => {
-    if (!detail || selectedAlertIndex === null) return detail?.evidence ?? [];
-    const alert = detail.alerts[selectedAlertIndex];
-    if (!alert) return [];
-    const ids = alert.evidenceIds;
-    return detail.evidence.filter((record) => ids.includes(record.uid));
-  })();
-
-  return (
-    <aside className="detail-inspector" aria-label="人员详情" data-maximized={maximized ? "true" : "false"}>
-      {loading || !detail ? (
-        <div className="detail-skeleton"><span /><span /><span /><span /><span /></div>
-      ) : (
-        <>
-          <header className="detail-header">
-            <div><span className="detail-kicker">人员核查详情</span><h2>{detail.person.name}</h2><p>{showSensitive ? detail.person.idNo : maskIdentity(detail.person.idNo)} · {showSensitive ? detail.person.phone : maskPhone(detail.person.phone)}</p></div>
-            <div className="detail-header-actions">
-              <button
-                className="icon-button"
-                type="button"
-                aria-label={maximized ? "还原详情" : "最大化详情"}
-                aria-pressed={maximized}
-                onClick={onToggleMaximize}
-              ><Icon name={maximized ? "restore" : "maximize"} /></button>
-              <button className="icon-button" type="button" aria-label="关闭详情" onClick={onClose}><Icon name="close" /></button>
-            </div>
-          </header>
-          <div className="detail-risk-line"><RiskBadge level={detail.person.level} /><strong>{detail.person.score}<span>/100</span></strong><span>{detail.person.alertCount} 项预警 · {detail.person.totalRecords} 条有效入住</span></div>
-          <div className="detail-scroll">
-            <section className="detail-section">
-              <h3>人员信息</h3>
-              <dl className="person-facts">
-                <div><dt>户籍地</dt><dd>{detail.person.householdRegion}</dd></div><div><dt>年龄 / 性别</dt><dd>{detail.person.age ?? "未知"} 岁 · {detail.person.gender || "未知"}</dd></div>
-                <div><dt>7 天最大</dt><dd>{detail.person.maxWeekCount ?? 0} 次</dd></div><div><dt>30 天最大</dt><dd>{detail.person.maxMonthCount} 次</dd></div><div><dt>365 天最大</dt><dd>{detail.person.maxYearCount} 次</dd></div>
-              </dl>
-            </section>
-            <section className="detail-section">
-              <div className="detail-section-heading"><h3>预警说明</h3><span>{detail.alerts.length} 项</span></div>
-              <div className="alert-list">
-                {detail.alerts.length ? detail.alerts.map((alert, index) => {
-                  const selected = selectedAlertIndex === index;
-                  return (
-                    <article
-                      className={`alert-item ${selected ? "is-selected" : ""}`}
-                      key={`${alert.kind}-${alert.title}`}
-                      role="button"
-                      tabIndex={0}
-                      aria-pressed={selected}
-                      onClick={() => onSelectAlert(index)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          onSelectAlert(index);
-                        }
-                      }}
-                    >
-                      <div className="alert-heading"><SeverityBadge severity={alert.severity} /><strong>{alert.title}</strong><span>+{alert.score} 分</span></div>
-                      <p>{alert.detail}</p>
-                      <small>{alert.evidenceCount} 条关联证据{selected ? " · 已筛选证据" : ""}</small>
-                    </article>
-                  );
-                }) : <p className="detail-empty">当前人员未命中预警规则。</p>}
-              </div>
-            </section>
-            <section className="detail-section evidence-section">
-              <div className="detail-section-heading">
-                <h3>住宿证据</h3>
-                <div className="evidence-controls">
-                  <button
-                    type="button"
-                    className={`text-button evidence-all-toggle ${selectedAlertIndex === null ? "is-active" : ""}`}
-                    aria-pressed={selectedAlertIndex === null}
-                    onClick={onClearAlertFilter}
-                  >全部证据</button>
-                  <span>{filteredEvidence.length} 条</span>
-                </div>
-              </div>
-              <div className="evidence-list">
-                {filteredEvidence.length ? filteredEvidence.map((record) => (
-                  <article className="evidence-item" key={record.uid}>
-                    <div><strong>{record.hotelName}</strong><span>房间 {record.roomNo || "未填"}</span></div>
-                    <p>{record.checkIn} 至 {record.checkOut || "未退房"}</p>
-                    <p>{record.region} · {record.address}</p>
-                    <small>{record.sourceFile} · 第 {record.sourceRow} 行</small>
-                    {record.issues.map((issue) => <span className="issue-tag" key={issue}>{issue}</span>)}
-                  </article>
-                )) : (
-                  selectedAlertIndex !== null
-                    ? <p className="detail-empty">该预警无关联证据。</p>
-                    : <p className="detail-empty">当前人员没有有效住宿证据。</p>
-                )}
-              </div>
-            </section>
-          </div>
-        </>
-      )}
-    </aside>
-  );
-}
-
-function SettingsPanel({ settings, onChange, onClose, onApply, busy }: { settings: AnalysisSettings; onChange: (settings: AnalysisSettings) => void; onClose: () => void; onApply: () => void; busy: boolean }) {
-  const update = <K extends keyof AnalysisSettings>(key: K, value: AnalysisSettings[K]) => onChange({ ...settings, [key]: value });
-  return (
-    <div className="panel-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <header><div><span className="detail-kicker">当前会话</span><h2 id="settings-title">分析参数</h2><p>时间范围和频次规则会重新计算统计与风险；人员筛选在结果列表中应用。</p></div><button className="icon-button" type="button" aria-label="关闭参数" onClick={onClose}><Icon name="close" /></button></header>
-        <div className="settings-content analysis-mode-list" role="radiogroup" aria-label="频次分析方式">
-          <section className={`analysis-mode-option ${settings.frequencyMode === "rolling" ? "is-selected" : ""}`}>
-            <label className="analysis-mode-selector"><input type="radio" name="frequency-mode" value="rolling" checked={settings.frequencyMode === "rolling"} onChange={() => update("frequencyMode", "rolling")} /><span><strong>高频入住阈值</strong><small>按滚动 7、30、365 天统计高频入住，适合日常研判。</small></span></label>
-            <fieldset className="analysis-mode-fields" disabled={settings.frequencyMode !== "rolling"}><legend className="sr-only">滚动频次参数</legend><div className="field-grid three"><NumberField label="7 天" value={settings.weekThreshold} onChange={(value) => update("weekThreshold", value ?? 1)} required/><NumberField label="30 天" value={settings.monthThreshold} onChange={(value) => update("monthThreshold", value ?? 1)} required/><NumberField label="365 天" value={settings.yearThreshold} onChange={(value) => update("yearThreshold", value ?? 1)} required/></div></fieldset>
-          </section>
-          <section className={`analysis-mode-option ${settings.frequencyMode === "selected" ? "is-selected" : ""}`}>
-            <label className="analysis-mode-selector"><input type="radio" name="frequency-mode" value="selected" checked={settings.frequencyMode === "selected"} onChange={() => update("frequencyMode", "selected")} /><span><strong>选定入住时间范围</strong><small>仅分析指定起止时间内的记录，并使用范围内入住阈值。</small></span></label>
-            <fieldset className="analysis-mode-fields" disabled={settings.frequencyMode !== "selected"}><legend className="sr-only">选定范围参数</legend><div className="field-grid three"><DateTimeField label="开始时间" value={settings.frequencyStart} onChange={(value) => update("frequencyStart", value)} required/><DateTimeField label="结束时间" value={settings.frequencyEnd} onChange={(value) => update("frequencyEnd", value)} required/><NumberField label="范围内入住阈值" value={settings.frequencyThreshold} onChange={(value) => update("frequencyThreshold", value ?? 1)} required/></div></fieldset>
-          </section>
-        </div>
-        <footer><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" type="button" disabled={busy} onClick={onApply}>{busy ? "正在计算" : "应用参数并重新分析"}</button></footer>
-      </section>
-    </div>
-  );
-}
-
-function Field({ label, value, onChange, placeholder = "不限" }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string }) {
-  return <label className="field"><span>{label}</span><input value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} /></label>;
-}
-
-function NumberField({ label, value, onChange, required = false }: { label: string; value: number | null; onChange: (value: number | null) => void; required?: boolean }) {
-  return <label className="field"><span>{label}</span><input type="number" min="0" required={required} value={value ?? ""} placeholder="不限" onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))} /></label>;
-}
-
-function DateTimeField({ label, value, onChange, required = false }: { label: string; value: string | null; onChange: (value: string | null) => void; required?: boolean }) {
-  return <label className="field"><span>{label}</span><input type="datetime-local" required={required} value={value?.slice(0, 16) ?? ""} onChange={(event) => onChange(event.target.value ? `${event.target.value}:00` : null)} /></label>;
-}
-
-function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm }: { title: string; description: string; confirmLabel: string; onCancel: () => void; onConfirm: () => void }) {
-  return <div className="panel-backdrop confirm-backdrop"><section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title"><span className="confirm-icon"><Icon name="trash" /></span><h2 id="confirm-title">{title}</h2><p>{description}</p><div><button className="button button-quiet" type="button" onClick={onCancel}>取消</button><button className="button button-danger" type="button" onClick={onConfirm}>{confirmLabel}</button></div></section></div>;
-}
-
-function EmptyWorkspace({ onFiles, onFolder }: { onFiles: () => void; onFolder: () => void }) {
-  return <section className="empty-workspace"><div className="empty-illustration" aria-hidden="true"><Icon name="file" size={38}/><span><Icon name="search" size={20}/></span></div><span className="empty-kicker">第一步</span><h2>导入入住数据</h2><p>选择 Excel、CSV 文件或整个文件夹。导入后会自动清洗记录、计算风险并保留核查证据。</p><div><button className="button button-primary" type="button" onClick={onFiles}><Icon name="upload"/>选择文件</button><button className="button button-secondary" type="button" onClick={onFolder}><Icon name="folder"/>选择文件夹</button></div><small><Icon name="shield" size={15}/> 全程在本机处理，不上传文件</small></section>;
-}
-
-function LoadingShell() {
-  return <div className="loading-shell"><div className="loading-top"/><div className="loading-side"><span/><span/><span/><span/></div><div className="loading-main"><span className="loading-title"/><span className="loading-subtitle"/><div className="loading-stats"><i/><i/><i/><i/><i/></div><div className="loading-table"><i/><i/><i/><i/><i/></div></div></div>;
-}
-
-function modeLabel(mode: WorkspaceSnapshot["mode"]): string {
-  if (mode === "demo") return "演示数据";
-  if (mode === "combined") return "合并分析";
-  if (mode === "session") return "历史会话";
-  return "空工作区";
-}
-
-function frequencyScopeLabel(settings: AnalysisSettings): string {
-  if (settings.frequencyMode === "selected") return `选定范围 ≥ ${settings.frequencyThreshold} 次`;
-  return `7/30/365 天：${settings.weekThreshold}/${settings.monthThreshold}/${settings.yearThreshold} 次`;
-}
-
-function analysisTimeScopeLabel(settings: AnalysisSettings): string {
-  if (settings.frequencyMode !== "selected") return "全部有效入住";
-  const start = settings.frequencyStart?.replace("T", " ") ?? "未设置";
-  const end = settings.frequencyEnd?.replace("T", " ") ?? "未设置";
-  return `${start} 至 ${end}`;
-}
-
-function activeExtraFilterCount(query: PersonQuery): number {
-  return Number(splitFilterTerms(query.hotelSearch ?? "").length > 0)
-    + activeDelimitedFieldCount([query.hotelProvince, query.hotelCity, query.hotelCounty])
-    + activeDelimitedFieldCount([query.householdProvince, query.householdCity, query.householdCounty])
-    + activeDelimitedFieldCount([query.excludeHouseholdProvince, query.excludeHouseholdCity, query.excludeHouseholdCounty])
-    + Number(query.minAge != null || query.maxAge != null || Boolean(query.gender))
-    + Number((query.alertState ?? "全部人员") !== "全部人员");
-}
-
-function activeRecordsFilterCount(query: ImportedRecordsQuery): number {
-  return Number(splitFilterTerms(query.hotelSearch ?? "").length > 0)
-    + activeDelimitedFieldCount([query.hotelProvince, query.hotelCity, query.hotelCounty])
-    + activeDelimitedFieldCount([query.householdProvince, query.householdCity, query.householdCounty])
-    + activeDelimitedFieldCount([query.excludeHouseholdProvince, query.excludeHouseholdCity, query.excludeHouseholdCounty])
-    + Number(query.minAge != null || query.maxAge != null || Boolean(query.gender));
-}
-
-function activeDelimitedFieldCount(values: Array<string | undefined>): number {
-  return values.reduce(
-    (count, value) => count + Number(splitFilterTerms(value ?? "").length > 0),
-    0,
-  );
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
-    return error.message;
-  }
-  return "操作未完成，请重试。";
 }
 
 export default App;
