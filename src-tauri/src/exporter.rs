@@ -14,13 +14,17 @@ pub struct OperationResult {
     pub path: Option<String>,
 }
 
+fn export_error<E: std::fmt::Display>(error: E) -> AppError {
+    AppError::Export(error.to_string())
+}
+
 pub fn export_to(
     kind: &str,
     session: &StoredSession,
     path: &Path,
 ) -> Result<OperationResult, AppError> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| AppError::Export(error.to_string()))?;
+        fs::create_dir_all(parent).map_err(export_error)?;
     }
     match kind {
         "summary_csv" => export_summary_csv(path, session)?,
@@ -36,9 +40,8 @@ pub fn export_to(
 }
 
 fn csv_writer(path: &Path) -> Result<csv::Writer<std::fs::File>, AppError> {
-    let mut file = fs::File::create(path).map_err(|error| AppError::Export(error.to_string()))?;
-    file.write_all(&[0xef, 0xbb, 0xbf])
-        .map_err(|error| AppError::Export(error.to_string()))?;
+    let mut file = fs::File::create(path).map_err(export_error)?;
+    file.write_all(&[0xef, 0xbb, 0xbf]).map_err(export_error)?;
     Ok(csv::Writer::from_writer(file))
 }
 
@@ -62,7 +65,7 @@ fn export_summary_csv(path: &Path, session: &StoredSession) -> Result<(), AppErr
             "风险等级",
             "预警摘要",
         ])
-        .map_err(|error| AppError::Export(error.to_string()))?;
+        .map_err(export_error)?;
     for item in &session.analyses {
         let person = &item.summary;
         writer
@@ -83,11 +86,9 @@ fn export_summary_csv(path: &Path, session: &StoredSession) -> Result<(), AppErr
                 person.level.clone(),
                 safe(&person.alert_titles.join("；")),
             ])
-            .map_err(|error| AppError::Export(error.to_string()))?;
+            .map_err(export_error)?;
     }
-    writer
-        .flush()
-        .map_err(|error| AppError::Export(error.to_string()))
+    writer.flush().map_err(export_error)
 }
 
 fn export_raw_csv(path: &Path, session: &StoredSession) -> Result<(), AppError> {
@@ -111,7 +112,7 @@ fn export_raw_csv(path: &Path, session: &StoredSession) -> Result<(), AppError> 
             "退房时间",
             "数据问题",
         ])
-        .map_err(|error| AppError::Export(error.to_string()))?;
+        .map_err(export_error)?;
     for record in session
         .records
         .iter()
@@ -136,19 +137,15 @@ fn export_raw_csv(path: &Path, session: &StoredSession) -> Result<(), AppError> 
                 safe(&record.check_out_text),
                 safe(&record.issues.join("；")),
             ])
-            .map_err(|error| AppError::Export(error.to_string()))?;
+            .map_err(export_error)?;
     }
-    writer
-        .flush()
-        .map_err(|error| AppError::Export(error.to_string()))
+    writer.flush().map_err(export_error)
 }
 
 fn export_risk_xlsx(path: &Path, session: &StoredSession) -> Result<(), AppError> {
     let mut workbook = Workbook::new();
     let worksheet = workbook.add_worksheet();
-    worksheet
-        .set_name("风险人员")
-        .map_err(|error| AppError::Export(error.to_string()))?;
+    worksheet.set_name("风险人员").map_err(export_error)?;
     let header = Format::new()
         .set_bold()
         .set_align(FormatAlign::Center)
@@ -171,7 +168,7 @@ fn export_risk_xlsx(path: &Path, session: &StoredSession) -> Result<(), AppError
     for (column, value) in headers.iter().enumerate() {
         worksheet
             .write_string_with_format(0, column as u16, *value, &header)
-            .map_err(|error| AppError::Export(error.to_string()))?;
+            .map_err(export_error)?;
     }
     let mut row = 1;
     for item in session
@@ -201,20 +198,18 @@ fn export_risk_xlsx(path: &Path, session: &StoredSession) -> Result<(), AppError
             for (column, value) in values.iter().enumerate() {
                 worksheet
                     .write_string(row, column as u16, value)
-                    .map_err(|error| AppError::Export(error.to_string()))?;
+                    .map_err(export_error)?;
             }
             row += 1;
         }
     }
     worksheet.autofit();
-    workbook
-        .save(path)
-        .map_err(|error| AppError::Export(error.to_string()))
+    workbook.save(path).map_err(export_error)
 }
 
 fn export_template(path: &Path) -> Result<(), AppError> {
     let bytes = include_bytes!("../resources/旅馆业数据导入模板.xlsx");
-    fs::write(path, bytes).map_err(|error| AppError::Export(error.to_string()))
+    fs::write(path, bytes).map_err(export_error)
 }
 
 fn safe(value: &str) -> String {
