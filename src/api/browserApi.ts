@@ -80,28 +80,23 @@ function allDemoImportedRecords(): DemoImportedRecord[] {
 }
 
 function toImportedStayRecord(record: DemoImportedRecord): ImportedStayRecord {
-  const {
-    hotelProvince,
-    hotelCity,
-    hotelCounty,
-    hotelRegion,
-    householdProvince,
-    householdCity,
-    householdCounty,
-    age,
-    gender,
-    ...rest
-  } = record;
-  void hotelProvince;
-  void hotelCity;
-  void hotelCounty;
-  void hotelRegion;
-  void householdProvince;
-  void householdCity;
-  void householdCounty;
-  void age;
-  void gender;
-  return rest;
+  return {
+    uid: record.uid,
+    sourceFile: record.sourceFile,
+    sourceRow: record.sourceRow,
+    name: record.name,
+    idNo: record.idNo,
+    phone: record.phone,
+    householdRegion: record.householdRegion,
+    hotelName: record.hotelName,
+    region: record.region,
+    address: record.address,
+    roomNo: record.roomNo,
+    checkIn: record.checkIn,
+    registerTime: record.registerTime,
+    checkOut: record.checkOut,
+    issues: record.issues,
+  };
 }
 
 export const browserApi: AppApi = {
