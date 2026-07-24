@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "storage.rs 实现 SQLite 历史会话契约；拆分必须保持 Signatures/Contracts/Tests Required 全部不变"}
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "storage 跨层 DTO 与命令契约；拆分不得改变公开方法签名与 CommandError 语义"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量与禁用模式；拆分需保持 legacy .xls 兼容路径与测试要求"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "后端模块组织约定；指导 storage/ 子模块目录布局"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "识别拆分过程中的共享原语，避免在新模块间制造重复"}
+{"file": ".trellis/tasks/archive/2026-07/07-24-repo-code-audit/audit-report.md", "reason": "审计报告 P1 #1，storage.rs 职责分布与拆分建议的来源"}
