@@ -777,7 +777,7 @@ fn parse_date(value: &str) -> Option<NaiveDate> {
 fn parse_age(value: &str) -> Option<u8> {
     static AGE: OnceLock<Regex> = OnceLock::new();
     let capture = AGE
-        .get_or_init(|| Regex::new(r"\d{1,3}").unwrap())
+        .get_or_init(|| Regex::new(r"\d{1,3}").expect("static regex pattern is valid"))
         .find(value)?
         .as_str()
         .parse::<u8>()
@@ -792,7 +792,9 @@ fn is_identity_number(value: &str) -> bool {
 }
 fn identity_regex() -> &'static Regex {
     static VALUE: OnceLock<Regex> = OnceLock::new();
-    VALUE.get_or_init(|| Regex::new(r"^(?:\d{17}[\dX]|\d{15})$").unwrap())
+    VALUE.get_or_init(|| {
+        Regex::new(r"^(?:\d{17}[\dX]|\d{15})$").expect("static regex pattern is valid")
+    })
 }
 fn identity_birth_date(id_no: &str) -> Option<NaiveDate> {
     if id_no.len() == 18 {
