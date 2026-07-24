@@ -702,3 +702,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 22: 统一 storage filter 构建器
+
+**Date**: 2026-07-24
+**Task**: 统一 storage filter 构建器
+**Branch**: `main`
+
+### Summary
+
+从 build_person_filter 与 build_records_filter 抽取 5 个共享子块（search/FTS、age、gender、household include、household exclude）为 helper 函数，消除 ~60% 重复。hotel name 与 hotel jurisdiction 因结构本质不同（EXISTS vs 直接列）保留内联。字节级比对 + 45 个现有测试守卫，行为完全不变。质量门全绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7305803` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
