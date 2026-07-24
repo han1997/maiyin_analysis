@@ -360,8 +360,14 @@ fn different_accommodation_cached(
     cache
         .entry(second.uid)
         .or_insert_with(|| (compact(&second.hotel_name), compact(&second.room_no)));
-    let first_location = cache.get(&first.uid).expect("first location is cached");
-    let second_location = cache.get(&second.uid).expect("second location is cached");
+    // or_insert_with above guarantees both keys are cached; the else branches
+    // are defensive only and never execute under the current invariants.
+    let Some(first_location) = cache.get(&first.uid) else {
+        return false;
+    };
+    let Some(second_location) = cache.get(&second.uid) else {
+        return false;
+    };
     (!first_location.0.is_empty()
         && !second_location.0.is_empty()
         && first_location.0 != second_location.0)
@@ -374,12 +380,14 @@ fn day_ranges(records: &[&Record]) -> (Vec<DayAnalysis>, Vec<usize>) {
     let mut days: Vec<DayAnalysis> = Vec::new();
     let mut record_days = Vec::with_capacity(records.len());
     for (index, record) in records.iter().enumerate() {
-        let day = record
-            .check_in
-            .expect("scoped analysis records have check-in times")
-            .date();
+        let Some(check_in) = record.check_in else {
+            continue;
+        };
+        let day = check_in.date();
         if days.last().is_some_and(|current| current.day == day) {
-            days.last_mut().expect("day exists").end = index + 1;
+            if let Some(current) = days.last_mut() {
+                current.end = index + 1;
+            }
         } else {
             days.push(DayAnalysis {
                 day,
