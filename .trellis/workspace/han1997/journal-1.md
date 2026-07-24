@@ -933,3 +933,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: 合并 activeExtraFilterCount 与 activeRecordsFilterCount
+
+**Date**: 2026-07-24
+**Task**: 合并 activeExtraFilterCount 与 activeRecordsFilterCount
+**Branch**: `main`
+
+### Summary
+
+抽取 activeSharedFilterCount 共享前 5 项计数。activeExtraFilterCount 调它 + alertState 项；activeRecordsFilterCount 直接调它。FilterCountQuery 内部接口结构兼容 PersonQuery/ImportedRecordsQuery。行为不变。质量门全绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `91b4dfb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

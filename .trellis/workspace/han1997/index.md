@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 28
+- **Total Sessions**: 29
 - **Last Active**: 2026-07-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~935 | Active |
+| `journal-1.md` | ~968 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 29 | 2026-07-24 | 合并 activeExtraFilterCount 与 activeRecordsFilterCount | `91b4dfb` | `main` |
 | 28 | 2026-07-24 | 清理 browserApi toImportedStayRecord 字段裁剪 | `4f3609d` | `main` |
 | 27 | 2026-07-24 | 抽取 export_error helper 收敛重复 map_err | `2590844` | `main` |
 | 26 | 2026-07-24 | 去重前端 filter 编排 | `0821c40` | `main` |
