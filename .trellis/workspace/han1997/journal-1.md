@@ -636,3 +636,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: 拆分 storage.rs 按职责分模块
+
+**Date**: 2026-07-24
+**Task**: 拆分 storage.rs 按职责分模块
+**Branch**: `main`
+
+### Summary
+
+将 storage.rs(3913行)纯机械拆分为 1 根+5 子模块(compress/schema/filter/write/tests)，零行为变更零API变更。三道门全绿：cargo test 45 passed/8 ignored、cargo fmt 无 diff、cargo clippy -D warnings 零告警。storage.rs 根降至 950 行。trellis-implement 子代理两次静默失败后改 main session 直接执行完成。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `72dcc17` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 19
+- **Total Sessions**: 20
 - **Last Active**: 2026-07-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~638 | Active |
+| `journal-1.md` | ~671 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-07-24 | 拆分 storage.rs 按职责分模块 | `72dcc17` | `main` |
 | 19 | 2026-07-24 | 全仓代码体检与优化 | `a71fbc7` | `main` |
 | 18 | 2026-07-23 | 优化数据分析性能 | `329023b` | `main` |
 | 17 | 2026-07-23 | 完成区域模糊多选筛选 | `2b8d232` | `main` |
