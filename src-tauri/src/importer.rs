@@ -182,115 +182,144 @@ fn merge_parsed_files(
     })
 }
 
-fn parse_file(path: &Path) -> Result<ParsedFile, AppError> {
-    let rows = read_table(path)?;
-    let (header_index, mut indexes, score) = detect_header_row(&rows);
+#[allow(clippy::large_enum_variant)] // short-lived return value; boxing would allocate per row in the import loop
+enum RowOutcome {
+    Skip,
+    MissingId,
+    ShortStay,
+    Valid(Record),
+}
+
+fn resolve_data_start_and_indexes(
+    rows: &[Vec<String>],
+    file_name: &str,
+) -> Result<(usize, FieldIndexes), String> {
+    let (header_index, mut indexes, score) = detect_header_row(rows);
     let data_start = if indexes.get("id_no").is_some_and(|items| !items.is_empty())
         && indexes
             .get("check_in")
             .is_some_and(|items| !items.is_empty())
     {
         header_index + 1
-    } else if let Some(start) = detect_template_data_start(&rows) {
+    } else if let Some(start) = detect_template_data_start(rows) {
         indexes = template_indexes();
         start
-    } else if let Some((start, inferred)) = infer_core_fields(&rows, indexes) {
+    } else if let Some((start, inferred)) = infer_core_fields(rows, indexes) {
         indexes = inferred;
         start
     } else {
-        return Ok(ParsedFile {
-            records: vec![],
-            stats: ImportStats::default(),
-            reason: Some(format!(
-                "{} 未识别到证件号码或入住时间列（表头得分 {}）",
-                file_name(path),
-                score
-            )),
-        });
+        return Err(format!(
+            "{} 未识别到证件号码或入住时间列（表头得分 {}）",
+            file_name, score
+        ));
     };
+    Ok((data_start, indexes))
+}
 
+fn build_record(
+    row: &[String],
+    row_index: usize,
+    indexes: &FieldIndexes,
+    source_file: &str,
+    today: NaiveDate,
+) -> RowOutcome {
+    if row.iter().all(|value| value.trim().is_empty()) {
+        return RowOutcome::Skip;
+    }
+    let id_no = compact_identity(&pick(row, indexes.get("id_no")));
+    let check_in_text = pick(row, indexes.get("check_in"));
+    if id_no.is_empty() || check_in_text.trim().is_empty() {
+        return RowOutcome::MissingId;
+    }
+
+    let check_in = parse_datetime(&check_in_text);
+    let check_out_text = pick(row, indexes.get("check_out"));
+    let check_out = parse_datetime(&check_out_text);
+    let register_time_text = pick(row, indexes.get("register_time"));
+    let register_time = parse_datetime(&register_time_text);
+    let mut issues = Vec::new();
+    if check_in.is_none() {
+        issues.push("入住时间无法解析".into());
+    }
+    if !check_out_text.is_empty() && check_out.is_none() {
+        issues.push("退房时间无法解析".into());
+    }
+    if let (Some(start), Some(end)) = (check_in, check_out) {
+        if end <= start {
+            issues.push("退房时间早于或等于入住时间".into());
+        }
+        if end - start < Duration::minutes(10) {
+            return RowOutcome::ShortStay;
+        }
+    }
+
+    let area = lookup_identity_area(&id_no);
+    let source_household = pick(row, indexes.get("household_region"));
+    let household_region = if area.region().is_empty() {
+        source_household
+    } else {
+        area.region()
+    };
+    let birth =
+        identity_birth_date(&id_no).or_else(|| parse_date(&pick(row, indexes.get("birth_date"))));
+    let age = parse_age(&pick(row, indexes.get("age"))).or_else(|| calculate_age(birth, today));
+    let gender = normalize_gender(&pick(row, indexes.get("gender")), &id_no);
+
+    RowOutcome::Valid(Record {
+        uid: 0,
+        source_file: source_file.to_string(),
+        source_row: row_index + 1,
+        name: pick(row, indexes.get("name")),
+        id_no: id_no.clone(),
+        phone: pick(row, indexes.get("phone")),
+        hotel_name: pick(row, indexes.get("hotel_name")),
+        province: pick(row, indexes.get("province")),
+        city: pick(row, indexes.get("city")),
+        county: pick(row, indexes.get("county")),
+        region: pick(row, indexes.get("region")),
+        address: pick(row, indexes.get("address")),
+        room_no: pick(row, indexes.get("room_no")),
+        check_in_text,
+        register_time_text,
+        check_out_text,
+        check_in,
+        register_time,
+        check_out,
+        person_key: format!("id:{id_no}"),
+        household_province: nonempty(pick(row, indexes.get("household_province")), &area.province),
+        household_city: nonempty(pick(row, indexes.get("household_city")), &area.city),
+        household_county: nonempty(pick(row, indexes.get("household_county")), &area.county),
+        household_region,
+        household_address: pick(row, indexes.get("household_address")),
+        age,
+        gender,
+        issues,
+    })
+}
+
+fn parse_file(path: &Path) -> Result<ParsedFile, AppError> {
+    let rows = read_table(path)?;
+    let source_file = file_name(path);
+    let (data_start, indexes) = match resolve_data_start_and_indexes(&rows, &source_file) {
+        Ok(result) => result,
+        Err(reason) => {
+            return Ok(ParsedFile {
+                records: vec![],
+                stats: ImportStats::default(),
+                reason: Some(reason),
+            })
+        }
+    };
     let mut stats = ImportStats::default();
     let mut records = Vec::with_capacity(rows.len().saturating_sub(data_start));
-    let source_file = file_name(path);
     let today = Local::now().date_naive();
     for (row_index, row) in rows.iter().enumerate().skip(data_start) {
-        if row.iter().all(|value| value.trim().is_empty()) {
-            continue;
+        match build_record(row, row_index, &indexes, &source_file, today) {
+            RowOutcome::Skip => {}
+            RowOutcome::MissingId => stats.missing_id_count += 1,
+            RowOutcome::ShortStay => stats.short_stay_count += 1,
+            RowOutcome::Valid(record) => records.push(record),
         }
-        let id_no = compact_identity(&pick(row, indexes.get("id_no")));
-        let check_in_text = pick(row, indexes.get("check_in"));
-        if id_no.is_empty() || check_in_text.trim().is_empty() {
-            stats.missing_id_count += 1;
-            continue;
-        }
-
-        let check_in = parse_datetime(&check_in_text);
-        let check_out_text = pick(row, indexes.get("check_out"));
-        let check_out = parse_datetime(&check_out_text);
-        let register_time_text = pick(row, indexes.get("register_time"));
-        let register_time = parse_datetime(&register_time_text);
-        let mut issues = Vec::new();
-        if check_in.is_none() {
-            issues.push("入住时间无法解析".into());
-        }
-        if !check_out_text.is_empty() && check_out.is_none() {
-            issues.push("退房时间无法解析".into());
-        }
-        if let (Some(start), Some(end)) = (check_in, check_out) {
-            if end <= start {
-                issues.push("退房时间早于或等于入住时间".into());
-            }
-            if end - start < Duration::minutes(10) {
-                stats.short_stay_count += 1;
-                continue;
-            }
-        }
-
-        let area = lookup_identity_area(&id_no);
-        let source_household = pick(row, indexes.get("household_region"));
-        let household_region = if area.region().is_empty() {
-            source_household
-        } else {
-            area.region()
-        };
-        let birth = identity_birth_date(&id_no)
-            .or_else(|| parse_date(&pick(row, indexes.get("birth_date"))));
-        let age = parse_age(&pick(row, indexes.get("age"))).or_else(|| calculate_age(birth, today));
-        let gender = normalize_gender(&pick(row, indexes.get("gender")), &id_no);
-
-        records.push(Record {
-            uid: 0,
-            source_file: source_file.clone(),
-            source_row: row_index + 1,
-            name: pick(row, indexes.get("name")),
-            id_no: id_no.clone(),
-            phone: pick(row, indexes.get("phone")),
-            hotel_name: pick(row, indexes.get("hotel_name")),
-            province: pick(row, indexes.get("province")),
-            city: pick(row, indexes.get("city")),
-            county: pick(row, indexes.get("county")),
-            region: pick(row, indexes.get("region")),
-            address: pick(row, indexes.get("address")),
-            room_no: pick(row, indexes.get("room_no")),
-            check_in_text,
-            register_time_text,
-            check_out_text,
-            check_in,
-            register_time,
-            check_out,
-            person_key: format!("id:{id_no}"),
-            household_province: nonempty(
-                pick(row, indexes.get("household_province")),
-                &area.province,
-            ),
-            household_city: nonempty(pick(row, indexes.get("household_city")), &area.city),
-            household_county: nonempty(pick(row, indexes.get("household_county")), &area.county),
-            household_region,
-            household_address: pick(row, indexes.get("household_address")),
-            age,
-            gender,
-            issues,
-        });
     }
     Ok(ParsedFile {
         records,
