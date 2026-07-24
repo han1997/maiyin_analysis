@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "验证清单中前端质量发现是否符合项目约定"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "验证类型安全发现是否成立"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "验证状态/渲染相关发现是否符合分页与 loading 约定"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验证 storage.rs 相关发现是否符合 SQLite 约定"}
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "验证跨层传输/命令粒度发现是否符合契约"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "验证后端质量发现是否符合禁用模式约定"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验证跨层数据流发现的完整性"}

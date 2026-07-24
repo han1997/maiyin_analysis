@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端 spec 索引：审计前端代码时的标尺，了解 Active 指南范围"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量约定：扫描代码质量维度时的判断依据"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "类型安全约定：扫描 any/断言/边界类型时的判断依据"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "状态管理约定（分页、applied queries、loading state）：识别重新渲染与状态结构隐患"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件模式约定：判断 App.tsx 等超大组件的拆分方向"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端 spec 索引：审计 Rust 代码时的标尺"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite 历史会话约定：扫描 storage.rs 时的判断依据"}
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "跨层命令/DTO/storage/error 契约：识别 WebView↔Rust 传输与命令粒度隐患"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量与禁用模式：扫描 Rust 代码质量时的判断依据"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层思维指南：评估数据流与跨层隐患"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "代码复用思维指南：识别重复模式与可复用点"}
