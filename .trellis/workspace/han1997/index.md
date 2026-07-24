@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 26
+- **Total Sessions**: 27
 - **Last Active**: 2026-07-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~869 | Active |
+| `journal-1.md` | ~902 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 27 | 2026-07-24 | 抽取 export_error helper 收敛重复 map_err | `2590844` | `main` |
 | 26 | 2026-07-24 | 去重前端 filter 编排 | `0821c40` | `main` |
 | 25 | 2026-07-24 | 移除 analysis 生产路径 .expect() | `2964170` | `main` |
 | 24 | 2026-07-24 | 拆分 parse_file 为定起始+列映射与逐行构造 | `1c65f0d` | `main` |

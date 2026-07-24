@@ -867,3 +867,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 27: 抽取 export_error helper 收敛重复 map_err
+
+**Date**: 2026-07-24
+**Task**: 抽取 export_error helper 收敛重复 map_err
+**Branch**: `main`
+
+### Summary
+
+新增泛型 export_error<E: Display> helper，14 处内联闭包 .map_err(|e| AppError::Export(e.to_string())) 替换为 .map_err(export_error)。覆盖 io::Error/csv::Error/XlsxError 三种错误类型。行为不变。质量门全绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2590844` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
