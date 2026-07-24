@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "importer 场景的 Wrong/Correct 去重键范式、merge_sessions 契约、load_records 使用约定"}
+{"file": ".trellis/tasks/archive/2026-07/07-24-repo-code-audit/audit-report.md", "reason": "审计报告 P2 #3，record_key 拼接键问题的定位与建议方向"}
