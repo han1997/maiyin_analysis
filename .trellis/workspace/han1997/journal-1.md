@@ -735,3 +735,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 23: merge_sessions 复用结构化 DeduplicationKey
+
+**Date**: 2026-07-24
+**Task**: merge_sessions 复用结构化 DeduplicationKey
+**Branch**: `main`
+
+### Summary
+
+删除 commands.rs 的 record_key/command_date_key（\u{1f} 拼接键，spec 标注的 Wrong 模式），merge_sessions 改调 importer::deduplication_key。importer.rs 的 4 个项提升为 pub(crate)。去重结果不变（字段列表一致 + importer 基准测试守卫）。质量门全绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8c60291` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

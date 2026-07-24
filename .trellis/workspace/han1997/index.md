@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 22
+- **Total Sessions**: 23
 - **Last Active**: 2026-07-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~737 | Active |
+| `journal-1.md` | ~770 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 23 | 2026-07-24 | merge_sessions 复用结构化 DeduplicationKey | `8c60291` | `main` |
 | 22 | 2026-07-24 | 统一 storage filter 构建器 | `7305803` | `main` |
 | 21 | 2026-07-24 | 拆分 App.tsx 子组件与辅助函数外移 | `b9f9690` | `main` |
 | 20 | 2026-07-24 | 拆分 storage.rs 按职责分模块 | `72dcc17` | `main` |
