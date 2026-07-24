@@ -900,3 +900,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: 清理 browserApi toImportedStayRecord 字段裁剪
+
+**Date**: 2026-07-24
+**Task**: 清理 browserApi toImportedStayRecord 字段裁剪
+**Branch**: `main`
+
+### Summary
+
+将 toImportedStayRecord 的解构+9个void模式改为显式重建 ImportedStayRecord 对象。15个字段逐个从 record 取值，TypeScript 编译器检查完整性。行为不变。质量门全绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4f3609d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
