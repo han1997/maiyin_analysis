@@ -353,7 +353,7 @@ export function getDemoDetail(personKey: string): PersonDetail {
       score: Math.min(person.score, index === 0 ? 45 : 38),
       title,
       detail: "该说明由演示适配器生成。Tauri 模式将展示 Rust 分析返回的完整规则说明和证据行。",
-      evidenceCount: Math.min(person.totalRecords, index === 0 ? person.maxMonthCount : person.maxYearCount),
+      evidenceCount: Math.min(person.totalRecords, index === 0 ? (person.maxMonthCount ?? 0) : (person.maxYearCount ?? 0)),
       evidenceIds: evidence.slice(0, Math.min(evidence.length, Math.max(1, person.alertCount))).map((record) => record.uid),
     })),
     evidence: evidence.slice(0, Math.min(evidence.length, Math.max(1, person.alertCount))),

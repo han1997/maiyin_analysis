@@ -320,8 +320,10 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   row-level SQLite predicates.
 - `PersonSummary` includes `householdProvince`, `householdCity`, `householdCounty`,
   `maxWeekCount`, `maxMonthCount`, `maxYearCount`, `hotelNames`, and `hotelRegions`.
-  Structured household fields use serde defaults and are optional in TypeScript for
-  legacy payload compatibility. Each hotel-region entry is
+  Structured household fields and all three max-count fields use serde defaults and are
+  optional in TypeScript for legacy payload compatibility. Missing max-count fields
+  deserialize to zero, while newly analyzed summaries still serialize all three camelCase
+  fields. Each hotel-region entry is
   `{ province, city, county, region }`; persisted additions use serde defaults.
 - Hotel-name input is split on comma, Chinese comma, enumeration comma,
   semicolon, or newline. Every non-empty term must fuzzy-match at least one
@@ -352,7 +354,7 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 | Start boundary after end boundary | `validation_error` and keep settings UI open |
 | Result-filter minimum age exceeds maximum age | Frontend toast; do not update the applied query or call Rust |
 | Missing check-in | Exclude from time-window analysis |
-| Old summary lacks `hotelRegions` or structured household fields | Deserialize lists/strings to empty defaults; TypeScript treats structured household fields as optional |
+| Old summary lacks `hotelRegions`, structured household fields, or any max-count field | Deserialize lists/strings to empty defaults and max counts to zero; TypeScript treats those compatibility fields as optional |
 | SQLite `user_version = 1` | Drop application tables, recreate database version `5`, and return an empty history list; the user re-imports source files |
 | SQLite `user_version = 2` | Drop application tables, recreate database version `5`, and return an empty history list; the user re-imports source files |
 | SQLite `user_version = 3` | Drop application and FTS tables, recreate database version `5`, and return an empty history list; the user re-imports source files |
@@ -408,7 +410,9 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
 - A populated database at `user_version = 3` reopens empty at `user_version = 5`.
 - A populated database at `user_version = 4` reopens with all rows searchable at
   `user_version = 5`.
-- Legacy settings ignore removed analysis fields, and missing `hotelRegions` defaults safely.
+- Legacy settings ignore removed analysis fields; missing `hotelRegions`, structured
+  household fields, or max-count fields default safely, and reserialization emits the
+  three camelCase max-count fields.
 - Frontend build asserts all camelCase DTO fields.
 
 ### 7. Wrong vs Correct

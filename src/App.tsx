@@ -700,8 +700,8 @@ function App() {
                       <td><span className="primary-cell-text">{person.householdRegion}</span><small>{person.gender || "未知"} · {person.age ?? "未知"} 岁</small></td>
                       <td className="numeric strong-number">{person.totalRecords}</td>
                       <td className="numeric">{person.maxWeekCount ?? 0}</td>
-                      <td className="numeric">{person.maxMonthCount}</td>
-                      <td className="numeric">{person.maxYearCount}</td>
+                      <td className="numeric">{person.maxMonthCount ?? 0}</td>
+                      <td className="numeric">{person.maxYearCount ?? 0}</td>
                       <td><div className="alert-summary">{person.alertTitles.length ? person.alertTitles.slice(0, 2).map((title) => <span key={title}>{title}</span>) : <span className="no-alert">未命中预警</span>}</div></td>
                       <td className="numeric score-cell"><strong>{person.score}</strong><span>/100</span></td>
                       <td><RiskBadge level={person.level} /></td>

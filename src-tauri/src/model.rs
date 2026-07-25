@@ -163,7 +163,9 @@ pub struct PersonSummary {
     pub total_records: usize,
     #[serde(default)]
     pub max_week_count: usize,
+    #[serde(default)]
     pub max_month_count: usize,
+    #[serde(default)]
     pub max_year_count: usize,
     pub overlap_days: usize,
     pub sequential_days: usize,
@@ -454,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_person_summary_defaults_structured_household_fields() {
+    fn legacy_person_summary_defaults_compatibility_fields() {
         let summary: PersonSummary = serde_json::from_value(serde_json::json!({
             "personKey": "id:1",
             "name": "测试人员",
@@ -464,8 +466,6 @@ mod tests {
             "age": 37,
             "gender": "男",
             "totalRecords": 1,
-            "maxMonthCount": 1,
-            "maxYearCount": 1,
             "overlapDays": 0,
             "sequentialDays": 0,
             "score": 0,
@@ -477,5 +477,13 @@ mod tests {
         assert!(summary.household_province.is_empty());
         assert!(summary.household_city.is_empty());
         assert!(summary.household_county.is_empty());
+        assert_eq!(summary.max_week_count, 0);
+        assert_eq!(summary.max_month_count, 0);
+        assert_eq!(summary.max_year_count, 0);
+
+        let serialized = serde_json::to_value(&summary).unwrap();
+        assert_eq!(serialized["maxWeekCount"], serde_json::json!(0));
+        assert_eq!(serialized["maxMonthCount"], serde_json::json!(0));
+        assert_eq!(serialized["maxYearCount"], serde_json::json!(0));
     }
 }

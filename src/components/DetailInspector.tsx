@@ -47,7 +47,7 @@ export function DetailInspector({ detail, loading, showSensitive, maximized, sel
               <h3>人员信息</h3>
               <dl className="person-facts">
                 <div><dt>户籍地</dt><dd>{detail.person.householdRegion}</dd></div><div><dt>年龄 / 性别</dt><dd>{detail.person.age ?? "未知"} 岁 · {detail.person.gender || "未知"}</dd></div>
-                <div><dt>7 天最大</dt><dd>{detail.person.maxWeekCount ?? 0} 次</dd></div><div><dt>30 天最大</dt><dd>{detail.person.maxMonthCount} 次</dd></div><div><dt>365 天最大</dt><dd>{detail.person.maxYearCount} 次</dd></div>
+                <div><dt>7 天最大</dt><dd>{detail.person.maxWeekCount ?? 0} 次</dd></div><div><dt>30 天最大</dt><dd>{detail.person.maxMonthCount ?? 0} 次</dd></div><div><dt>365 天最大</dt><dd>{detail.person.maxYearCount ?? 0} 次</dd></div>
               </dl>
             </section>
             <section className="detail-section">

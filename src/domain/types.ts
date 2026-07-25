@@ -43,8 +43,8 @@ export interface PersonSummary {
   gender: string;
   totalRecords: number;
   maxWeekCount?: number;
-  maxMonthCount: number;
-  maxYearCount: number;
+  maxMonthCount?: number;
+  maxYearCount?: number;
   overlapDays: number;
   sequentialDays: number;
   score: number;
