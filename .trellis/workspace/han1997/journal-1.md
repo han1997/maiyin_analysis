@@ -999,3 +999,37 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 31: 抽取 score_and_pick_sheet 合并 importer sheet 择优
+
+**Date**: 2026-07-26
+**Task**: 抽取 score_and_pick_sheet 合并 importer sheet 择优
+**Branch**: `main`
+
+### Summary
+
+从 read_workbook 与 read_legacy_xls 抽出共享 score_and_pick_sheet 编排器，收敛 4 步判定+best-score 兜底+早退+错误短路，行为保持。质量门全绿（fmt/clippy/test 45 通过）。spec 增补 Centralized sheet selection。本轮同时归档上一任务 07-25-align-person-summary-max-count-optionality。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `33c25a6` | (see git log) |
+| `a40a186` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
