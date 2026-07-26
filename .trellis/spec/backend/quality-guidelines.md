@@ -84,6 +84,19 @@ Iterator<Item = Result<Vec<Vec<String>>, AppError>>) -> Result<Option<Vec<Vec<St
 BIFF fallback stays isolated in `read_workbook`. Changes to sheet selection
 go in `score_and_pick_sheet` only — do not re-duplicate the loop per reader.
 
+### Test-gated timing helpers
+
+Test-only timing/telemetry inside production functions must be externalized
+into a zero-production-cost helper rather than inlined as `#[cfg(test)]`
+blocks. The pattern: define a small struct whose fields are all
+`#[cfg(test)]`-gated (zero-sized in release), with a `mark(label)` method
+that is a no-op outside `cfg(test)` and emits the observed metric inside it.
+`SessionStore::save` uses `SaveTimer::start()` + `timer.mark("<stage>")` for
+its `MAIYIN_SAVE_TIMINGS` stage timing; the helper owns the env gate and the
+`save_stage={} elapsed_ms={}` stderr format, and `save`'s body stays free of
+`#[cfg(test)]` annotations so the production control flow reads cleanly. New
+test-gated telemetry in hot production paths should follow the same shape.
+
 
 ---
 

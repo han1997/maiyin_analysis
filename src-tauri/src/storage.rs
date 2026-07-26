@@ -39,6 +39,39 @@ pub(crate) use write::{
 // Keep generated multi-row INSERT statements below SQLite's historical 999-variable
 // default as well as the higher limit used by the bundled build.
 
+struct SaveTimer {
+    #[cfg(test)]
+    started: Instant,
+    #[cfg(test)]
+    enabled: bool,
+}
+
+impl SaveTimer {
+    fn start() -> Self {
+        Self {
+            #[cfg(test)]
+            started: Instant::now(),
+            #[cfg(test)]
+            enabled: std::env::var_os("MAIYIN_SAVE_TIMINGS").is_some(),
+        }
+    }
+
+    fn mark(&self, label: &str) {
+        #[cfg(test)]
+        {
+            if self.enabled {
+                eprintln!(
+                    "save_stage={} elapsed_ms={}",
+                    label,
+                    self.started.elapsed().as_millis()
+                );
+            }
+        }
+        #[cfg(not(test))]
+        let _ = label;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionStore {
     storage_root: PathBuf,
@@ -146,20 +179,7 @@ impl SessionStore {
             .pragma_update(None, "cache_size", -BULK_SAVE_CACHE_KIB)
             .map_err(sql_error)?;
         let transaction = connection.transaction().map_err(sql_error)?;
-        #[cfg(test)]
-        let save_timing_enabled = std::env::var_os("MAIYIN_SAVE_TIMINGS").is_some();
-        #[cfg(test)]
-        let save_started = Instant::now();
-        #[cfg(test)]
-        let save_mark = |label: &str| {
-            if save_timing_enabled {
-                eprintln!(
-                    "save_stage={} elapsed_ms={}",
-                    label,
-                    save_started.elapsed().as_millis()
-                );
-            }
-        };
+        let timer = SaveTimer::start();
         let stale_combined_session_ids = {
             let mut statement = transaction
                 .prepare("SELECT session_id FROM sessions WHERE listed = 0 AND session_id <> ?1")
@@ -213,8 +233,7 @@ impl SessionStore {
                 ],
             )
             .map_err(sql_error)?;
-        #[cfg(test)]
-        save_mark("session_row");
+        timer.mark("session_row");
 
         {
             let mut record_filter_counts = HashMap::<(String, String), i64>::new();
@@ -286,8 +305,7 @@ impl SessionStore {
                     .map_err(|_| AppError::Storage("record preparation worker panicked".into()))?;
                 consumer_result
             })?;
-            #[cfg(test)]
-            save_mark("records_base");
+            timer.mark("records_base");
             // Mirror all rows into the contentless FTS5 trigram table in one SQLite statement.
             // The SELECT uses the source table's real rowid, not the session-local business
             // uid, and avoids one Rust/SQLite round-trip per imported record.
@@ -299,8 +317,7 @@ impl SessionStore {
                     [&session.session_id],
                 )
                 .map_err(sql_error)?;
-            #[cfg(test)]
-            save_mark("records_fts");
+            timer.mark("records_fts");
             let mut count_statement = transaction
                 .prepare(
                     "INSERT INTO record_filter_counts(
@@ -318,16 +335,13 @@ impl SessionStore {
                     ])
                     .map_err(sql_error)?;
             }
-            #[cfg(test)]
-            save_mark("records_and_fts");
+            timer.mark("records_and_fts");
         }
 
         insert_analysis_rows(&transaction, &session.session_id, &session.analyses)?;
-        #[cfg(test)]
-        save_mark("people_base");
+        timer.mark("people_base");
         insert_people_search_index(&transaction, &session.session_id)?;
-        #[cfg(test)]
-        save_mark("people_fts");
+        timer.mark("people_fts");
 
         if !session.is_combined {
             transaction
@@ -339,8 +353,7 @@ impl SessionStore {
                 .map_err(sql_error)?;
         }
         transaction.commit().map_err(sql_error)?;
-        #[cfg(test)]
-        save_mark("commit");
+        timer.mark("commit");
         metadata_from(&connection, &session.session_id)
     }
 
