@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify the refactor preserves the legacy spreadsheet compatibility contract: BIFF fallback stays isolated in read_workbook, error messages unchanged, fallback rows flow through same downstream logic."}
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Verify importer determinism (record/UID order follows input file/row order) and importer test coverage expectations still hold after the helper extraction."}

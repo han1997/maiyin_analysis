@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Legacy spreadsheet compatibility contract: Calamine primary, BIFF fallback isolated inside read_workbook, error contract table, fallback rows feed same downstream logic — refactor must preserve all of this."}
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Importer determinism & performance scenario (deterministic record/UID order, error matrix) and importer test coverage expectations (title rows, template positions, inferred id/time columns) that the sheet-picking helper must keep intact."}
