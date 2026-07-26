@@ -339,25 +339,18 @@ fn read_table(path: &Path) -> Result<Vec<Vec<String>>, AppError> {
     }
 }
 
-fn read_workbook(path: &Path) -> Result<Vec<Vec<String>>, AppError> {
-    let mut workbook = open_workbook_auto(path)
-        .map_err(|error| AppError::Read(format!("{}：{error}", file_name(path))))?;
+fn score_and_pick_sheet(
+    sheets: impl Iterator<Item = Result<Vec<Vec<String>>, AppError>>,
+) -> Result<Option<Vec<Vec<String>>>, AppError> {
     let mut best_rows = Vec::new();
     let mut best_score = 0;
-    for sheet_name in workbook.sheet_names().to_owned() {
-        let range = workbook.worksheet_range(&sheet_name).map_err(|error| {
-            AppError::Parse(format!("{} / {}：{error}", file_name(path), sheet_name))
-        })?;
-        let rows = range
-            .rows()
-            .map(|row| row.iter().map(ToString::to_string).collect::<Vec<_>>())
-            .filter(|row| row.iter().any(|value| !value.trim().is_empty()))
-            .collect::<Vec<_>>();
+    for sheet in sheets {
+        let rows = sheet?;
         if rows.is_empty() {
             continue;
         }
         if detect_template_data_start(&rows).is_some() {
-            return Ok(rows);
+            return Ok(Some(rows));
         }
         let (_, indexes, score) = detect_header_row(&rows);
         if indexes.get("id_no").is_some_and(|items| !items.is_empty())
@@ -365,18 +358,44 @@ fn read_workbook(path: &Path) -> Result<Vec<Vec<String>>, AppError> {
                 .get("check_in")
                 .is_some_and(|items| !items.is_empty())
         {
-            return Ok(rows);
+            return Ok(Some(rows));
         }
         if infer_core_fields(&rows, indexes).is_some() {
-            return Ok(rows);
+            return Ok(Some(rows));
         }
         if score > best_score {
             best_score = score;
             best_rows = rows;
         }
     }
-    if !best_rows.is_empty() {
-        return Ok(best_rows);
+    Ok((!best_rows.is_empty()).then_some(best_rows))
+}
+
+fn read_workbook(path: &Path) -> Result<Vec<Vec<String>>, AppError> {
+    let mut workbook = open_workbook_auto(path)
+        .map_err(|error| AppError::Read(format!("{}：{error}", file_name(path))))?;
+    let path_name = file_name(path);
+    let sheet_names = workbook.sheet_names().to_owned();
+    let mut sheet_names = sheet_names.into_iter();
+    let sheets = std::iter::from_fn(move || {
+        let sheet_name = sheet_names.next()?;
+        match workbook.worksheet_range(&sheet_name) {
+            Ok(range) => {
+                let rows = range
+                    .rows()
+                    .map(|row| row.iter().map(ToString::to_string).collect::<Vec<_>>())
+                    .filter(|row| row.iter().any(|value| !value.trim().is_empty()))
+                    .collect::<Vec<_>>();
+                Some(Ok(rows))
+            }
+            Err(error) => Some(Err(AppError::Parse(format!(
+                "{} / {}：{error}",
+                path_name, sheet_name
+            )))),
+        }
+    });
+    if let Some(rows) = score_and_pick_sheet(sheets)? {
+        return Ok(rows);
     }
     if extension(path) == "xls" {
         if let Some(rows) = read_legacy_xls(path)? {
@@ -393,10 +412,7 @@ fn read_legacy_xls(path: &Path) -> Result<Option<Vec<Vec<String>>>, AppError> {
     let bytes = fs::read(path)?;
     let workbook = rxls::Workbook::open(&bytes)
         .map_err(|error| AppError::Parse(format!("{}：{error}", file_name(path))))?;
-    let mut best_rows = Vec::new();
-    let mut best_score = 0;
-
-    for sheet in &workbook.sheets {
+    let sheets = workbook.sheets.iter().map(|sheet| {
         let cells = sheet
             .cells()
             .filter_map(|(row, column, cell)| {
@@ -407,31 +423,9 @@ fn read_legacy_xls(path: &Path) -> Result<Option<Vec<Vec<String>>>, AppError> {
                 Some((row as usize + 1, column as usize + 1, value))
             })
             .collect::<Vec<_>>();
-        let Some(rows) = legacy_cells_to_rows(cells) else {
-            continue;
-        };
-
-        if detect_template_data_start(&rows).is_some() {
-            return Ok(Some(rows));
-        }
-        let (_, indexes, score) = detect_header_row(&rows);
-        if indexes.get("id_no").is_some_and(|items| !items.is_empty())
-            && indexes
-                .get("check_in")
-                .is_some_and(|items| !items.is_empty())
-        {
-            return Ok(Some(rows));
-        }
-        if infer_core_fields(&rows, indexes).is_some() {
-            return Ok(Some(rows));
-        }
-        if score > best_score {
-            best_score = score;
-            best_rows = rows;
-        }
-    }
-
-    Ok((!best_rows.is_empty()).then_some(best_rows))
+        Ok(legacy_cells_to_rows(cells).unwrap_or_default())
+    });
+    score_and_pick_sheet(sheets)
 }
 
 fn legacy_cells_to_rows(cells: Vec<(usize, usize, String)>) -> Option<Vec<Vec<String>>> {

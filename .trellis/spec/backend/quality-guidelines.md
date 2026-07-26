@@ -73,6 +73,17 @@ Wrong: require users to rename or resave an otherwise readable source file.
 Correct: isolate the compatibility fallback inside `read_workbook` and keep
 all downstream business rules format-independent.
 
+### Centralized sheet selection
+
+Per-sheet scoring/picking (template detection → header id_no/check_in match
+→ core-field inference → best-score fallback, with early return and per-sheet
+error short-circuit) is centralized in `score_and_pick_sheet(sheets: impl
+Iterator<Item = Result<Vec<Vec<String>>, AppError>>) -> Result<Option<Vec<Vec<String>>>, AppError>`.
+`read_workbook` (Calamine) and `read_legacy_xls` (rxls) each build a lazy
+`Result<rows, AppError>` iterator from their sheet source and delegate; the
+BIFF fallback stays isolated in `read_workbook`. Changes to sheet selection
+go in `score_and_pick_sheet` only — do not re-duplicate the loop per reader.
+
 
 ---
 
