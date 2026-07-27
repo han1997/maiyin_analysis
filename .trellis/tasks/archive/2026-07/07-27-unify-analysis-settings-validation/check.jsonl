@@ -1,0 +1,3 @@
+﻿{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Verify frontend validation aligns with backend validate_settings semantics: threshold range 1..99999, selected required boundaries, start<=end, error message formats match."}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Verify validation module placement (src/domain/validation.ts) follows DTO conventions and AppApi boundary rules."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Verify new validation.test.ts meets frontend test coverage conventions."}
