@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SessionStore::save contract: signature, transaction rollback semantics, bulk-save pipeline, duplicate-key/serialization/FTS failure handling, ignored release benchmarks for large save — refactor must preserve all of these."}
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Save usage context: import/merge/reanalysis share analyze_records; import and combined session use full save (replace_analysis is separate). Confirms save's transaction boundary and stage ordering must not change."}

@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify the refactor preserves SessionStore::save contract: transaction rollback semantics, stage ordering, duplicate-key/FTS failure handling, and benchmark save coverage stay intact."}
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Verify save usage context unchanged: import/merge full-save path still produces the same persisted rows and transaction boundary."}
