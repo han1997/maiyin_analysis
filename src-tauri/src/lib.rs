@@ -36,5 +36,8 @@ pub fn run() {
             commands::set_storage_directory,
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run maiyin analysis");
+        .unwrap_or_else(|error| {
+            eprintln!("failed to run maiyin analysis: {error}");
+            std::process::exit(1);
+        });
 }
