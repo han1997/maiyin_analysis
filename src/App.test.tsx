@@ -196,7 +196,7 @@ describe("App", () => {
     fireEvent.click(within(settings).getByRole("radio", { name: /选定入住时间范围/ }));
     expect((within(settings).getByLabelText("开始时间").closest("fieldset") as HTMLFieldSetElement).disabled).toBe(false);
     fireEvent.click(within(settings).getByRole("button", { name: "应用参数并重新分析" }));
-    expect(screen.getByText("选定入住时间范围时，开始时间和结束时间均为必填。")).toBeTruthy();
+    expect(screen.getByText("选定入住时间范围时，开始时间和结束时间均为必填")).toBeTruthy();
   });
 
   it("changes page sizes and keeps frequency columns compact", async () => {

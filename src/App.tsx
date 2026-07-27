@@ -25,6 +25,7 @@ import type {
   WorkspaceSnapshot,
 } from "./domain/types";
 import { initialRecordsQuery } from "./domain/types";
+import { validateAnalysisSettings } from "./domain/validation";
 import { formatDateTime, formatInteger, maskIdentity, maskPhone } from "./lib/format";
 import {
   activeExtraFilterCount,
@@ -285,19 +286,9 @@ function App() {
 
   async function applySettings() {
     if (!draftSettings) return;
-    const activeThresholds = draftSettings.frequencyMode === "selected"
-      ? [draftSettings.frequencyThreshold]
-      : [draftSettings.weekThreshold, draftSettings.monthThreshold, draftSettings.yearThreshold];
-    if (activeThresholds.some((value) => value < 1)) {
-      setToast({ tone: "error", message: "频次阈值必须是大于 0 的整数。" });
-      return;
-    }
-    if (draftSettings.frequencyMode === "selected" && (!draftSettings.frequencyStart || !draftSettings.frequencyEnd)) {
-      setToast({ tone: "error", message: "选定入住时间范围时，开始时间和结束时间均为必填。" });
-      return;
-    }
-    if (draftSettings.frequencyMode === "selected" && draftSettings.frequencyStart! > draftSettings.frequencyEnd!) {
-      setToast({ tone: "error", message: "入住开始时间不能晚于结束时间。" });
+    const error = validateAnalysisSettings(draftSettings);
+    if (error) {
+      setToast({ tone: "error", message: error });
       return;
     }
     setSettingsOpen(false);
