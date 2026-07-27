@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 34
+- **Total Sessions**: 35
 - **Last Active**: 2026-07-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1134 | Active |
+| `journal-1.md` | ~1167 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 35 | 2026-07-27 | 抽取前端 validateAnalysisSettings 对齐后端校验语义 | `5006c3a` | `main` |
 | 34 | 2026-07-27 | 抽取 bulk_insert_batch 宏统一 execute_*_batch 骨架 | `27c9bab` | `main` |
 | 33 | 2026-07-27 | lib.rs 启动 expect 改 stderr + exit(1) | `d8a72cd` | `main` |
 | 32 | 2026-07-27 | 抽取 SaveTimer 外置 save 内 cfg(test) 计时块 | `a0da004` | `main` |

@@ -1132,3 +1132,36 @@ lib.rs:39 .expect() 改 .unwrap_or_else() 输出完整 tauri::Error Display 到 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 35: 抽取前端 validateAnalysisSettings 对齐后端校验语义
+
+**Date**: 2026-07-27
+**Task**: 抽取前端 validateAnalysisSettings 对齐后端校验语义
+**Branch**: `main`
+
+### Summary
+
+新增 src/domain/validation.ts（THRESHOLD_MIN/MAX + THRESHOLD_LABELS + validateAnalysisSettings），applySettings 改调它。对齐后端 validate_settings 语义：补阈值上界 99999 检查、错误消息带 label+范围、selected 模式消息去句尾句号。新增 validation.test.ts 覆盖上界+对齐消息。后端不改（source of truth）。质量门全绿（前端 37 通过+后端 45 通过）。spec 增补 Cross-layer settings validation 到 type-safety.md。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5006c3a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
