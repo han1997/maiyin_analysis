@@ -1099,3 +1099,36 @@ lib.rs:39 .expect() 改 .unwrap_or_else() 输出完整 tauri::Error Display 到 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 34: 抽取 bulk_insert_batch 宏统一 execute_*_batch 骨架
+
+**Date**: 2026-07-27
+**Task**: 抽取 bulk_insert_batch 宏统一 execute_*_batch 骨架
+**Branch**: `main`
+
+### Summary
+
+新增 bulk_insert_batch! 声明宏生成 3 个 execute_*_batch 函数（alert/person_hotel/person_hotel_region），消除 SQL 构造+push 值+execute 重复骨架。adapt 了 macro hygiene（ + 字段表达式列表）。SQL 字节保持、列顺序/参数绑定/chunk 大小/错误映射零变化。5 个 insert_*_batches 保持现状。质量门全绿（fmt/clippy/test 45 通过）。spec 增补 bulk_insert_batch! 宏说明到 database-guidelines.md。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `27c9bab` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

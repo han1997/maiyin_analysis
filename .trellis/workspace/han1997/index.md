@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 33
+- **Total Sessions**: 34
 - **Last Active**: 2026-07-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1101 | Active |
+| `journal-1.md` | ~1134 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 34 | 2026-07-27 | 抽取 bulk_insert_batch 宏统一 execute_*_batch 骨架 | `27c9bab` | `main` |
 | 33 | 2026-07-27 | lib.rs 启动 expect 改 stderr + exit(1) | `d8a72cd` | `main` |
 | 32 | 2026-07-27 | 抽取 SaveTimer 外置 save 内 cfg(test) 计时块 | `a0da004` | `main` |
 | 31 | 2026-07-26 | 抽取 score_and_pick_sheet 合并 importer sheet 择优 | `33c25a6`, `a40a186` | `main` |
