@@ -348,6 +348,18 @@ transaction.execute(
 The bounded form overlaps CPU preparation with SQLite work, caps live payload memory,
 and preserves one-transaction rollback semantics.
 
+The shared `bulk_insert_batch!` declarative macro generates the
+`execute_alert_batch` / `execute_person_hotel_batch` /
+`execute_person_hotel_region_batch` helpers. It takes the function name, SQL
+prefix, value-group placeholder, column count, row tuple type, the loop
+binding, and the per-row field expressions, then emits the
+`multi_row_insert_sql` + `Vec::<&dyn ToSql>` + `prepare_cached` +
+`params_from_iter` + `map_err(sql_error)` skeleton. Tuple-arity differences
+make a clean generic function impractical, so the macro owns the skeleton
+while callers supply only the table-specific bits. New batch-execute helpers
+that follow the same shape should go through the macro rather than
+re-duplicating the skeleton.
+
 #### Wrong: prefix-only or concatenated jurisdiction matching
 
 ```sql

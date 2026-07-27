@@ -7,6 +7,37 @@ pub(crate) const SAVE_PREPARE_CHUNK_SIZE: usize = 4_096;
 
 pub(crate) const BULK_INSERT_VARIABLE_LIMIT: usize = 900;
 
+macro_rules! bulk_insert_batch {
+    (
+        $name:ident,
+        $sql_prefix:literal,
+        $value_group:literal,
+        $column_count:literal,
+        $row_type:ty,
+        $row:ident,
+        [$($field:expr),+ $(,)?]
+    ) => {
+        pub(crate) fn $name(
+            transaction: &Transaction<'_>,
+            session_id: &str,
+            rows: &[$row_type],
+        ) -> Result<(), AppError> {
+            let sql = multi_row_insert_sql($sql_prefix, $value_group, rows.len());
+            let mut values = Vec::<&dyn ToSql>::with_capacity(rows.len() * $column_count);
+            for $row in rows {
+                values.push(&session_id);
+                $(values.push(&$field);)+
+            }
+            transaction
+                .prepare_cached(&sql)
+                .map_err(sql_error)?
+                .execute(params_from_iter(values))
+                .map_err(sql_error)?;
+            Ok(())
+        }
+    };
+}
+
 pub(crate) struct PreparedRecord<'a> {
     pub(crate) record: &'a Record,
     pub(crate) uid: i64,
@@ -336,30 +367,15 @@ pub(crate) fn insert_alert_batches(
     Ok(())
 }
 
-pub(crate) fn execute_alert_batch(
-    transaction: &Transaction<'_>,
-    session_id: &str,
-    rows: &[(&str, i64, &str)],
-) -> Result<(), AppError> {
-    let sql = multi_row_insert_sql(
-        "INSERT INTO alerts(session_id, person_key, alert_index, alert_json) VALUES ",
-        "(?, ?, ?, ?)",
-        rows.len(),
-    );
-    let mut values = Vec::<&dyn ToSql>::with_capacity(rows.len() * 4);
-    for row in rows {
-        values.push(&session_id);
-        values.push(&row.0);
-        values.push(&row.1);
-        values.push(&row.2);
-    }
-    transaction
-        .prepare_cached(&sql)
-        .map_err(sql_error)?
-        .execute(params_from_iter(values))
-        .map_err(sql_error)?;
-    Ok(())
-}
+bulk_insert_batch!(
+    execute_alert_batch,
+    "INSERT INTO alerts(session_id, person_key, alert_index, alert_json) VALUES ",
+    "(?, ?, ?, ?)",
+    4,
+    (&str, i64, &str),
+    row,
+    [row.0, row.1, row.2]
+);
 
 pub(crate) fn insert_person_hotel_batches(
     transaction: &Transaction<'_>,
@@ -386,30 +402,16 @@ pub(crate) fn insert_person_hotel_batches(
     Ok(())
 }
 
-pub(crate) fn execute_person_hotel_batch(
-    transaction: &Transaction<'_>,
-    session_id: &str,
-    rows: &[(&str, &str)],
-) -> Result<(), AppError> {
-    let sql = multi_row_insert_sql(
-        "INSERT OR IGNORE INTO person_hotels(\
-         session_id, person_key, hotel_name_norm) VALUES ",
-        "(?, ?, ?)",
-        rows.len(),
-    );
-    let mut values = Vec::<&dyn ToSql>::with_capacity(rows.len() * 3);
-    for (person_key, hotel_name) in rows {
-        values.push(&session_id);
-        values.push(person_key);
-        values.push(hotel_name);
-    }
-    transaction
-        .prepare_cached(&sql)
-        .map_err(sql_error)?
-        .execute(params_from_iter(values))
-        .map_err(sql_error)?;
-    Ok(())
-}
+bulk_insert_batch!(
+    execute_person_hotel_batch,
+    "INSERT OR IGNORE INTO person_hotels(\
+     session_id, person_key, hotel_name_norm) VALUES ",
+    "(?, ?, ?)",
+    3,
+    (&str, &str),
+    row,
+    [row.0, row.1]
+);
 
 pub(crate) fn insert_person_hotel_region_batches(
     transaction: &Transaction<'_>,
@@ -442,33 +444,16 @@ pub(crate) fn insert_person_hotel_region_batches(
     Ok(())
 }
 
-pub(crate) fn execute_person_hotel_region_batch(
-    transaction: &Transaction<'_>,
-    session_id: &str,
-    rows: &[(&str, &str, &str, &str, &str)],
-) -> Result<(), AppError> {
-    let sql = multi_row_insert_sql(
-        "INSERT OR IGNORE INTO person_hotel_regions(\
-         session_id, person_key, province_norm, city_norm, county_norm, region_norm) VALUES ",
-        "(?, ?, ?, ?, ?, ?)",
-        rows.len(),
-    );
-    let mut values = Vec::<&dyn ToSql>::with_capacity(rows.len() * 6);
-    for (person_key, province, city, county, region) in rows {
-        values.push(&session_id);
-        values.push(person_key);
-        values.push(province);
-        values.push(city);
-        values.push(county);
-        values.push(region);
-    }
-    transaction
-        .prepare_cached(&sql)
-        .map_err(sql_error)?
-        .execute(params_from_iter(values))
-        .map_err(sql_error)?;
-    Ok(())
-}
+bulk_insert_batch!(
+    execute_person_hotel_region_batch,
+    "INSERT OR IGNORE INTO person_hotel_regions(\
+     session_id, person_key, province_norm, city_norm, county_norm, region_norm) VALUES ",
+    "(?, ?, ?, ?, ?, ?)",
+    6,
+    (&str, &str, &str, &str, &str),
+    row,
+    [row.0, row.1, row.2, row.3, row.4]
+);
 
 pub(crate) fn multi_row_insert_sql(prefix: &str, value_group: &str, row_count: usize) -> String {
     debug_assert!(row_count > 0);
