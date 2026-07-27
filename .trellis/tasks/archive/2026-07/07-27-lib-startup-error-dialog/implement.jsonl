@@ -1,0 +1,1 @@
+﻿{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Tauri app entry point and error contract context: CommandError {code, message} for runtime commands; this task touches the startup entry point (.run().expect) above the command layer. Confirms the entry point structure (Builder + setup + invoke_handler) that must be preserved."}
