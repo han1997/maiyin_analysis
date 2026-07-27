@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 31
-- **Last Active**: 2026-07-26
+- **Total Sessions**: 32
+- **Last Active**: 2026-07-27
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1035 | Active |
+| `journal-1.md` | ~1068 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 32 | 2026-07-27 | 抽取 SaveTimer 外置 save 内 cfg(test) 计时块 | `a0da004` | `main` |
 | 31 | 2026-07-26 | 抽取 score_and_pick_sheet 合并 importer sheet 择优 | `33c25a6`, `a40a186` | `main` |
 | 30 | 2026-07-25 | importer 静态正则 unwrap 改 expect | `b21020b` | `main` |
 | 29 | 2026-07-24 | 合并 activeExtraFilterCount 与 activeRecordsFilterCount | `91b4dfb` | `main` |

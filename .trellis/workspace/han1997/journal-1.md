@@ -1033,3 +1033,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 32: 抽取 SaveTimer 外置 save 内 cfg(test) 计时块
+
+**Date**: 2026-07-27
+**Task**: 抽取 SaveTimer 外置 save 内 cfg(test) 计时块
+**Branch**: `main`
+
+### Summary
+
+从 SessionStore::save 抽出零生产开销 SaveTimer helper（cfg(test) 字段+mark no-op），save 主干 10 处 cfg(test) 块外置为 let timer = SaveTimer::start() + 7 处 timer.mark()，计时输出格式/env 门控/标签集合字节保持。质量门全绿（fmt/clippy/test 45 通过）。spec 增补 Test-gated timing helpers 模式。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a0da004` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
