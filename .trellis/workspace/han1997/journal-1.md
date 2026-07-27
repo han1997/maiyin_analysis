@@ -1066,3 +1066,36 @@ Replaced full-session JSON history loading with versioned SQLite storage and bac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 33: lib.rs 启动 expect 改 stderr + exit(1)
+
+**Date**: 2026-07-27
+**Task**: lib.rs 启动 expect 改 stderr + exit(1)
+**Branch**: `main`
+
+### Summary
+
+lib.rs:39 .expect() 改 .unwrap_or_else() 输出完整 tauri::Error Display 到 stderr + std::process::exit(1)，避免 raw panic 与 Windows 系统崩溃对话框。行为保持（成功路径不变）。质量门全绿（fmt/clippy/test 45 通过）。spec 增补 Startup entry point 错误处理约定到 error-handling.md。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d8a72cd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
