@@ -1,0 +1,1 @@
+﻿{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Bulk-insert contract: multi-row INSERT <=900 bound variables, FTS via INSERT...SELECT, one transaction rollback on failure. The refactor must preserve SQL text, column order, param binding, chunk size, and error mapping (sql_error) for all 8 batch insert functions."}
