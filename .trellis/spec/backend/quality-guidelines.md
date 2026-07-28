@@ -97,6 +97,50 @@ its `MAIYIN_SAVE_TIMINGS` stage timing; the helper owns the env gate and the
 `#[cfg(test)]` annotations so the production control flow reads cleanly. New
 test-gated telemetry in hot production paths should follow the same shape.
 
+### Threshold-switched hybrid for dense overlap detection
+
+`analyze_person` overlap detection switches between an exact O(n²) path and
+a fast sweep-line path based on per-day record count (`DENSE_OVERLAP_THRESHOLD
+= 32`). Days with `end - start ≤ 32` stay on the original nested loop with
+`break` early-exit and exact `add_pair` calls — evidence output is bit-for-bit
+unchanged. Days exceeding the threshold dispatch to `detect_dense_day_overlaps`,
+which produces the same four evidence fields (`pair_count`,
+`different_place_count`, `pair_labels`, `evidence_ids`) via:
+
+- **pair_count**: sweep-line with `BTreeMap<NaiveDateTime, Vec<usize>>` keyed by
+  `effective_end`. Expire intervals via `.range(..=check_in)` before counting;
+  accumulate `active_count` as each second record enters (count first, then
+  insert — the current record never counts itself).
+- **different_place_count**: accommodation grouping via
+  `HashMap<(String, String), usize>` (key = `(compact(hotel_name),
+  compact(room_no))`). `same_place = active same-group count`;
+  `different = active_count - same_place`. This is **exact when hotel/room are
+  populated**; empty fields are grouped as a distinct key, slightly
+  overestimating `different_place_count`. The overestimate is conservative
+  (severity leans 高) and only affects >32 records/day pathological paths —
+  acceptable per the task ADR; ≤32 days use the exact path.
+- **pair_labels**: bounded nested loop over the first
+  `min(DENSE_OVERLAP_THRESHOLD, day_len)` second records, collecting ≤4 labels
+  then breaking. O(threshold²) = O(1024), constant.
+- **evidence_ids**: all-overlap shortcut — if the day's first record
+  `effective_end > last second.check_in`, every record participates → emit all
+  uids in `0..end` (O(n)). Otherwise, track an `involved: HashSet<u64>` during
+  the sweep (second + all overlapping active firsts).
+
+The original O(n²) loop skips dense days via `dense_day_set.contains(...)` to
+avoid double-counting. Overlap ownership stays on `days[day_index].overlap`
+(second record's check_in date), matching existing semantics. The
+`overlap_score` formula (`min(35, 20 + P*2 + D*5)`) and all DTOs are
+unchanged. Benchmark `benchmark_dense_overlap_analysis` asserts
+`evidence_count == record_count` and `overlap_days == 1` — both paths must
+keep these green.
+
+Generalize this pattern when an O(n²) hot path must also produce rich
+evidence (not just counts): keep the exact path for normal inputs, add a
+threshold-switched fast path for pathological inputs, and document which
+evidence fields are approximated and why the approximation is safe
+(conservative direction, capped score, or untested edge case).
+
 
 ---
 

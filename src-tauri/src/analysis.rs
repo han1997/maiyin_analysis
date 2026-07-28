@@ -5,11 +5,12 @@ use crate::model::{
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 use rayon::prelude::*;
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 const PARALLEL_SORT_THRESHOLD: usize = 4_096;
 const HASH_DEDUP_THRESHOLD: usize = 8;
 const ROLLING_WINDOW_DAYS: [i64; 3] = [7, 30, 365];
+const DENSE_OVERLAP_THRESHOLD: usize = 32;
 
 #[derive(Clone, Copy, Default)]
 struct WindowRange {
@@ -121,6 +122,137 @@ fn compare_analyses(left: &PersonAnalysis, right: &PersonAnalysis) -> Ordering {
         .then_with(|| left.summary.person_key.cmp(&right.summary.person_key))
 }
 
+fn detect_dense_day_overlaps(
+    records: &[&Record],
+    day_index: usize,
+    days: &mut [DayAnalysis],
+    location_cache: &mut HashMap<u64, (String, String)>,
+) {
+    let start = days[day_index].start;
+    let end = days[day_index].end;
+    let first_idx = (0..end).find(|&i| records[i].check_in.is_some());
+    let last_idx = (start..end).rev().find(|&i| records[i].check_in.is_some());
+    let (Some(first_idx), Some(last_idx)) = (first_idx, last_idx) else {
+        return;
+    };
+    let last_check_in = records[last_idx].check_in.unwrap();
+    let all_overlap = effective_end(records[first_idx]) > last_check_in;
+
+    let mut summary = OverlapSummary::new();
+    let mut active_count: usize = 0;
+    let mut active_groups: HashMap<(String, String), usize> = HashMap::new();
+    let mut active_by_end: BTreeMap<NaiveDateTime, Vec<usize>> = BTreeMap::new();
+    let mut involved: HashSet<u64> = HashSet::new();
+
+    for i in 0..end {
+        let record = records[i];
+        let Some(check_in) = record.check_in else {
+            continue;
+        };
+
+        let expired_keys: Vec<NaiveDateTime> = active_by_end
+            .range(..=check_in)
+            .map(|(key, _)| *key)
+            .collect();
+        for key in expired_keys {
+            if let Some(indices) = active_by_end.remove(&key) {
+                for &idx in &indices {
+                    let group_key = location_cache
+                        .get(&records[idx].uid)
+                        .cloned()
+                        .unwrap_or_default();
+                    if let Some(count) = active_groups.get_mut(&group_key) {
+                        *count -= 1;
+                        if *count == 0 {
+                            active_groups.remove(&group_key);
+                        }
+                    }
+                    active_count -= 1;
+                }
+            }
+        }
+
+        let group_key = location_cache
+            .entry(record.uid)
+            .or_insert_with(|| (compact(&record.hotel_name), compact(&record.room_no)))
+            .clone();
+
+        if i >= start {
+            summary.pair_count += active_count;
+            let same_place = active_groups.get(&group_key).copied().unwrap_or(0);
+            summary.different_place_count += active_count - same_place;
+
+            if !all_overlap {
+                involved.insert(record.uid);
+                for (_, indices) in active_by_end.iter() {
+                    for &idx in indices {
+                        involved.insert(records[idx].uid);
+                    }
+                }
+            }
+        }
+
+        active_count += 1;
+        *active_groups.entry(group_key).or_insert(0) += 1;
+        active_by_end
+            .entry(effective_end(record))
+            .or_default()
+            .push(i);
+    }
+
+    for second_idx in start..end {
+        if summary.pair_labels.len() >= 4 {
+            break;
+        }
+        if second_idx - start >= DENSE_OVERLAP_THRESHOLD {
+            break;
+        }
+        let second = records[second_idx];
+        let Some(second_check_in) = second.check_in else {
+            continue;
+        };
+        let first_lower = second_idx.saturating_sub(DENSE_OVERLAP_THRESHOLD);
+        for first in records[first_lower..second_idx].iter().copied() {
+            if summary.pair_labels.len() >= 4 {
+                break;
+            }
+            if first.check_in.is_none() {
+                continue;
+            }
+            if effective_end(first) > second_check_in {
+                summary.pair_labels.push(format!(
+                    "{} {} 与 {} {}",
+                    fallback(&first.hotel_name, "未填旅馆"),
+                    fallback(&first.room_no, "未填房间"),
+                    fallback(&second.hotel_name, "未填旅馆"),
+                    fallback(&second.room_no, "未填房间"),
+                ));
+            }
+        }
+    }
+
+    if all_overlap {
+        summary.evidence_ids = (0..end)
+            .filter_map(|i| records[i].check_in.map(|_| records[i].uid))
+            .collect();
+        summary.evidence_seen = summary.evidence_ids.iter().copied().collect();
+    } else {
+        summary.evidence_ids = (0..end)
+            .filter_map(|i| {
+                let record = records[i];
+                if record.check_in.is_some() && involved.contains(&record.uid) {
+                    Some(record.uid)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        summary.evidence_seen = involved;
+    }
+
+    days[day_index].overlap = Some(summary);
+}
+
 fn analyze_person(mut records: Vec<&Record>, settings: &AnalysisSettings) -> PersonAnalysis {
     records.sort_by_key(|record| record.check_in.unwrap_or(NaiveDateTime::MIN));
     if records.len() == 1 {
@@ -132,6 +264,17 @@ fn analyze_person(mut records: Vec<&Record>, settings: &AnalysisSettings) -> Per
     let mut overlap_days = 0;
     let mut sequential_days = 0;
     let mut location_cache = HashMap::new();
+
+    let dense_days: Vec<usize> = days
+        .iter()
+        .enumerate()
+        .filter(|(_, day)| day.end - day.start > DENSE_OVERLAP_THRESHOLD)
+        .map(|(index, _)| index)
+        .collect();
+    for &day_index in &dense_days {
+        detect_dense_day_overlaps(&records, day_index, &mut days, &mut location_cache);
+    }
+    let dense_day_set: HashSet<usize> = dense_days.into_iter().collect();
 
     for (first_index, first) in records.iter().enumerate() {
         let Some(first_start) = first.check_in else {
@@ -145,6 +288,9 @@ fn analyze_person(mut records: Vec<&Record>, settings: &AnalysisSettings) -> Per
             };
             if second_start >= first_end {
                 break;
+            }
+            if dense_day_set.contains(&record_days[second_index]) {
+                continue;
             }
             if first_start < effective_end(second) {
                 let different_place =
