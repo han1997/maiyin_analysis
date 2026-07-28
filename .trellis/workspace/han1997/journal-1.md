@@ -1231,3 +1231,36 @@ lib.rs:39 .expect() 改 .unwrap_or_else() 输出完整 tauri::Error Display 到 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 38: Task: 导出性能优化与进度反馈与中文化
+
+**Date**: 2026-07-29
+**Task**: Task: 导出性能优化与进度反馈与中文化
+**Branch**: `main`
+
+### Summary
+
+三种导出（summary_csv/raw_csv/risk_xlsx）全部重写对齐参考仓库 io_service.py：summary 18列拆户籍省/市/县区+frequencyWindowCount；raw 23列拆户籍+年龄/性别+地域省市县+NaiveDateTime 格式化；risk_xlsx 26列 sheet 风险合并明细，垂直合并14列人块+12列证据行，ALERT_KIND_LABELS 中文映射，分级配色(高/中/关注/正常)，freeze_panes+autofilter，数值列 write_number（合并单元格用 placeholder-then-overwrite 技巧）。性能：拆分加载（summary 用新增 load_analyses 不反序列化 records，raw 用 load_records 不反序列化 analyses）；safe() 返回 Cow 减少克隆。进度：export_result 加 on_progress Channel，复用 ProgressPayload/make_progress_callback 模式，按行计数百分比。前端 exportResult 加 onProgress+progress 伴生 state。model.rs PersonSummary 加 frequency_window_count 字段（serde default 兼容旧会话）。storage.rs 加 load_analyses 方法（与 load 共享 load_session_analyses helper DRY）。新增 5 个导出测试（calamine 回读校验格式）。质量门全绿：cargo fmt/clippy/test(50 passed)、npm lint/test(37 passed)/build。spec: tauri-contract.md 更新 export_result 签名+导出格式表+PersonSummary frequencyWindowCount+测试要求；quality-guidelines.md 新增 Export split loading and format pinning 约定。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ad83a69` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
