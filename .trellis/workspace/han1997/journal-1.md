@@ -1198,3 +1198,36 @@ lib.rs:39 .expect() 改 .unwrap_or_else() 输出完整 tauri::Error Display 到 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 37: Task: 导入分析进度条与默认最大化启动
+
+**Date**: 2026-07-28
+**Task**: Task: 导入分析进度条与默认最大化启动
+**Branch**: `main`
+
+### Summary
+
+为 import_paths/import_folders/reanalyze/merge_sessions 4 个 Tauri 命令注入 tauri::ipc::Channel<ProgressPayload>，分相位（scanning/parsing/analyzing/saving）emit {phase,current,total,label}，节流 50ms。域层 analyze_records 与 importer::import_paths 加 Option<&dyn Fn(usize,usize)+Send+Sync> 回调保持 Tauri 无关，Rayon par_iter 内 AtomicUsize 递增。前端 AppApi 4 方法加可选 onProgress，tauriApi 用 new Channel()，App.tsx 加 progress 伴生 state（与 busy 并列，finally 同清），导入内联条 + 顶部条渲染确定性进度（total=0 回退不定）。窗口 tauri.conf.json 加 maximized:true 声明式启动最大化。质量门全绿：cargo fmt/clippy/test(45 passed)、npm lint/test(37 passed)/build。spec: tauri-contract.md 更新 4 命令签名 + 注释；quality-guidelines.md 新增 Tauri 2 Channel-based progress reporting 约定。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3abc254` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
