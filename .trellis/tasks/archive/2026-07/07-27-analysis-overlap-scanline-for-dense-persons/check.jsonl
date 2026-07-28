@@ -1,0 +1,2 @@
+﻿{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Verify overlap scoring formula, evidence_count, overlap_days, severity (高/中) semantics preserved. Benchmark assertions: evidence_count==record_count, overlap_days==1."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify the dense path approximation (different_place_count via grouping) is acceptable per the quality bar: score caps at 35, severity leans 高 (conservative)."}
