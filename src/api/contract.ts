@@ -7,19 +7,20 @@ import type {
   PersonDetail,
   PersonPage,
   PersonQuery,
+  Progress,
   WorkspaceSnapshot,
 } from "../domain/types";
 
 export interface AppApi {
   readonly runtime: "browser" | "tauri";
   bootstrap(): Promise<WorkspaceSnapshot>;
-  importFiles(): Promise<WorkspaceSnapshot | null>;
-  importFolder(): Promise<WorkspaceSnapshot | null>;
+  importFiles(onProgress?: (p: Progress) => void): Promise<WorkspaceSnapshot | null>;
+  importFolder(onProgress?: (p: Progress) => void): Promise<WorkspaceSnapshot | null>;
   loadSession(sessionId: string): Promise<WorkspaceSnapshot>;
-  mergeSessions(sessionIds: string[]): Promise<WorkspaceSnapshot>;
+  mergeSessions(sessionIds: string[], onProgress?: (p: Progress) => void): Promise<WorkspaceSnapshot>;
   deleteSession(sessionId: string): Promise<WorkspaceSnapshot>;
   clearWorkspace(): Promise<WorkspaceSnapshot>;
-  reanalyze(settings: AnalysisSettings): Promise<WorkspaceSnapshot>;
+  reanalyze(settings: AnalysisSettings, onProgress?: (p: Progress) => void): Promise<WorkspaceSnapshot>;
   queryPeople(query: PersonQuery): Promise<PersonPage>;
   getPersonDetail(personKey: string): Promise<PersonDetail>;
   getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsPage>;

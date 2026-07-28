@@ -12,9 +12,59 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Instant;
 use tauri::State;
 use uuid::Uuid;
+
+/// Progress payload emitted through a Tauri 2 `ipc::Channel` during long-running
+/// import / analysis operations. `total == 0` marks an indeterminate phase that
+/// only carries a human-readable label (e.g. the save step).
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressPayload {
+    pub phase: String,
+    pub current: usize,
+    pub total: usize,
+    pub label: String,
+}
+
+/// Build a throttled progress callback bound to a Tauri `Channel`. The returned
+/// closure reports `(current, total)` and emits at most once every 50ms, plus
+/// always on the final call (`current == total`) and on the first call of a
+/// phase so the UI receives the real total immediately. The throttle is
+/// per-phase: each `make_progress_callback` call owns its own timer.
+fn make_progress_callback(
+    channel: tauri::ipc::Channel<ProgressPayload>,
+    phase: &str,
+    label_template: &str,
+) -> Arc<dyn Fn(usize, usize) + Send + Sync> {
+    let phase = phase.to_string();
+    let label_template = label_template.to_string();
+    let start = Instant::now();
+    let last_emit = Arc::new(AtomicU64::new(0));
+    Arc::new(move |current: usize, total: usize| {
+        let now = start.elapsed().as_nanos() as u64;
+        let last = last_emit.load(Ordering::Relaxed);
+        let first_call = last == 0;
+        let throttled = now.saturating_sub(last) < 50_000_000;
+        if !first_call && throttled && current != total {
+            return;
+        }
+        last_emit.store(now, Ordering::Relaxed);
+        let label = label_template
+            .replace("{current}", &current.to_string())
+            .replace("{total}", &total.to_string());
+        let _ = channel.send(ProgressPayload {
+            phase: phase.clone(),
+            current,
+            total,
+            label,
+        });
+    })
+}
 
 pub struct AppState {
     inner: Mutex<BackendState>,
@@ -51,6 +101,7 @@ pub fn bootstrap_workspace(state: State<'_, AppState>) -> Result<WorkspaceSnapsh
 #[tauri::command]
 pub async fn import_paths(
     paths: Vec<String>,
+    on_progress: tauri::ipc::Channel<ProgressPayload>,
     state: State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, CommandError> {
     let (store, settings) = {
@@ -65,8 +116,24 @@ pub async fn import_paths(
         )
     };
     let metadata = tauri::async_runtime::spawn_blocking(move || {
-        let imported = importer::import_paths(&paths)?;
-        let (analyses, stats) = analyze_records(&imported.records, &settings);
+        let parse_cb = make_progress_callback(
+            on_progress.clone(),
+            "parsing",
+            "正在解析文件 {current}/{total}",
+        );
+        let imported = importer::import_paths(&paths, Some(&*parse_cb))?;
+        let analyze_cb = make_progress_callback(
+            on_progress.clone(),
+            "analyzing",
+            "正在分析 {current}/{total}",
+        );
+        let (analyses, stats) = analyze_records(&imported.records, &settings, Some(&*analyze_cb));
+        let _ = on_progress.send(ProgressPayload {
+            phase: "saving".into(),
+            current: 0,
+            total: 0,
+            label: "正在保存会话…".into(),
+        });
         let session = StoredSession {
             schema_version: CURRENT_SCHEMA_VERSION,
             session_id: format!(
@@ -97,8 +164,15 @@ pub async fn import_paths(
 #[tauri::command]
 pub async fn import_folders(
     paths: Vec<String>,
+    on_progress: tauri::ipc::Channel<ProgressPayload>,
     state: State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, CommandError> {
+    let _ = on_progress.send(ProgressPayload {
+        phase: "scanning".into(),
+        current: 0,
+        total: 0,
+        label: "正在扫描文件夹…".into(),
+    });
     let files =
         tauri::async_runtime::spawn_blocking(move || importer::discover_supported_files(&paths))
             .await
@@ -108,7 +182,7 @@ pub async fn import_folders(
             AppError::Empty("所选文件夹及其子目录中没有 .xls、.xlsx 或 .csv 文件".into()).into(),
         );
     }
-    import_paths(files, state).await
+    import_paths(files, on_progress, state).await
 }
 
 #[tauri::command]
@@ -126,6 +200,7 @@ pub fn load_session(
 #[tauri::command]
 pub async fn merge_sessions(
     session_ids: Vec<String>,
+    on_progress: tauri::ipc::Channel<ProgressPayload>,
     state: State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, CommandError> {
     if session_ids.len() < 2 {
@@ -164,7 +239,18 @@ pub async fn merge_sessions(
                 combined.push(record);
             }
         }
-        let (analyses, stats) = analyze_records(&combined, &settings);
+        let analyze_cb = make_progress_callback(
+            on_progress.clone(),
+            "analyzing",
+            "正在分析 {current}/{total}",
+        );
+        let (analyses, stats) = analyze_records(&combined, &settings, Some(&*analyze_cb));
+        let _ = on_progress.send(ProgressPayload {
+            phase: "saving".into(),
+            current: 0,
+            total: 0,
+            label: "正在保存会话…".into(),
+        });
         let imported = combined.len();
         let session = StoredSession {
             schema_version: CURRENT_SCHEMA_VERSION,
@@ -218,13 +304,25 @@ pub fn clear_workspace(state: State<'_, AppState>) -> Result<WorkspaceSnapshot, 
 #[tauri::command]
 pub async fn reanalyze(
     settings: AnalysisSettings,
+    on_progress: tauri::ipc::Channel<ProgressPayload>,
     state: State<'_, AppState>,
 ) -> Result<WorkspaceSnapshot, CommandError> {
     validate_settings(&settings)?;
     let (store, session_id) = current_store(&state)?;
     let metadata = tauri::async_runtime::spawn_blocking(move || {
         let (_, records) = store.load_records(&session_id)?;
-        let (analyses, stats) = analyze_records(&records, &settings);
+        let analyze_cb = make_progress_callback(
+            on_progress.clone(),
+            "analyzing",
+            "正在分析 {current}/{total}",
+        );
+        let (analyses, stats) = analyze_records(&records, &settings, Some(&*analyze_cb));
+        let _ = on_progress.send(ProgressPayload {
+            phase: "saving".into(),
+            current: 0,
+            total: 0,
+            label: "正在保存分析…".into(),
+        });
         store.replace_analysis(
             &session_id,
             CURRENT_SCHEMA_VERSION,

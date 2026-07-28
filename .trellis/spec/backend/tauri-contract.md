@@ -12,17 +12,30 @@ Rust commands are coarse-grained and return serializable DTOs:
 
 ```rust
 bootstrap_workspace() -> Result<WorkspaceSnapshot, CommandError>
-import_paths(paths: Vec<String>) -> Result<WorkspaceSnapshot, CommandError>
-import_folders(paths: Vec<String>) -> Result<WorkspaceSnapshot, CommandError>
+import_paths(paths: Vec<String>, on_progress: Channel<ProgressPayload>) -> Result<WorkspaceSnapshot, CommandError>
+import_folders(paths: Vec<String>, on_progress: Channel<ProgressPayload>) -> Result<WorkspaceSnapshot, CommandError>
 load_session(session_id: String) -> Result<WorkspaceSnapshot, CommandError>
-merge_sessions(session_ids: Vec<String>) -> Result<WorkspaceSnapshot, CommandError>
+merge_sessions(session_ids: Vec<String>, on_progress: Channel<ProgressPayload>) -> Result<WorkspaceSnapshot, CommandError>
 delete_session(session_id: String) -> Result<WorkspaceSnapshot, CommandError>
-reanalyze(settings: AnalysisSettings) -> Result<WorkspaceSnapshot, CommandError>
+reanalyze(settings: AnalysisSettings, on_progress: Channel<ProgressPayload>) -> Result<WorkspaceSnapshot, CommandError>
 query_people(query: PersonQuery) -> Result<PersonPage, CommandError>
 get_person_detail(person_key: String) -> Result<PersonDetail, CommandError>
 get_imported_records(query: ImportedRecordsQuery) -> Result<ImportedRecordsPage, CommandError>
 export_result(kind: String, path: String) -> Result<OperationResult, CommandError>
 ```
+
+Long-running commands (`import_paths`, `import_folders`, `reanalyze`, `merge_sessions`)
+accept `on_progress: tauri::ipc::Channel<ProgressPayload>` to stream phase/percent
+updates to the WebView during `spawn_blocking` work. The Channel is per-call (frontend
+`new Channel()` per invoke) and carries `ProgressPayload { phase, current, total, label }`
+(serde camelCase; `total = 0` = indeterminate phase, label-only). Validation checks
+(`validate_settings`, `session_ids.len() < 2`) run BEFORE any emit so error paths
+produce no spurious progress. The domain layer (`analyze_records`, `importer::import_paths`)
+stays Tauri-agnostic via `Option<&dyn Fn(usize, usize) + Send + Sync>`; `commands.rs`
+owns the throttle (50ms) and payload construction. See
+[`quality-guidelines.md`](./quality-guidelines.md) "Tauri 2 Channel-based progress
+reporting" for the reusable pattern. The returned `WorkspaceSnapshot` is unchanged —
+progress is a side-channel, not a response field.
 
 The TypeScript `AppApi` mirrors these operations. Browser mode implements the same interface with fixture data and never claims that fixture data was parsed from a local file.
 

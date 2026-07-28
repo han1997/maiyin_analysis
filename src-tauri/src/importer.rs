@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use walkdir::WalkDir;
 
@@ -111,7 +112,10 @@ fn normalize_path(path: &Path) -> String {
         .into_owned()
 }
 
-pub fn import_paths(paths: &[String]) -> Result<ImportedData, AppError> {
+pub fn import_paths(
+    paths: &[String],
+    on_progress: Option<&(dyn Fn(usize, usize) + Send + Sync)>,
+) -> Result<ImportedData, AppError> {
     let files: Vec<PathBuf> = paths
         .iter()
         .map(PathBuf::from)
@@ -123,9 +127,21 @@ pub fn import_paths(paths: &[String]) -> Result<ImportedData, AppError> {
         ));
     }
 
+    let total = files.len();
+    if let Some(f) = on_progress {
+        f(0, total);
+    }
+    let counter = AtomicUsize::new(0);
     let parsed = files
         .par_iter()
-        .map(|path| parse_file(path))
+        .map(|path| {
+            let result = parse_file(path);
+            if let Some(f) = on_progress {
+                let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                f(done, total);
+            }
+            result
+        })
         .collect::<Vec<_>>()
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
@@ -964,8 +980,8 @@ mod discovery_tests {
             second.to_string_lossy().into_owned(),
         ];
 
-        let first_run = import_paths(&paths).unwrap();
-        let second_run = import_paths(&paths).unwrap();
+        let first_run = import_paths(&paths, None).unwrap();
+        let second_run = import_paths(&paths, None).unwrap();
         let identity = |data: &super::ImportedData| {
             data.records
                 .iter()
@@ -988,10 +1004,13 @@ mod discovery_tests {
         let second = root.join("second.xlsx");
         fs::write(&first, b"not an xlsx").unwrap();
         fs::write(&second, b"also not an xlsx").unwrap();
-        let error = import_paths(&[
-            first.to_string_lossy().into_owned(),
-            second.to_string_lossy().into_owned(),
-        ])
+        let error = import_paths(
+            &[
+                first.to_string_lossy().into_owned(),
+                second.to_string_lossy().into_owned(),
+            ],
+            None,
+        )
         .err()
         .unwrap()
         .to_string();

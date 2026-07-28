@@ -6,6 +6,7 @@ use chrono::{Duration, NaiveDate, NaiveDateTime};
 use rayon::prelude::*;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::AtomicUsize;
 
 const PARALLEL_SORT_THRESHOLD: usize = 4_096;
 const HASH_DEDUP_THRESHOLD: usize = 8;
@@ -73,6 +74,7 @@ impl OverlapSummary {
 pub fn analyze_records(
     records: &[Record],
     settings: &AnalysisSettings,
+    on_progress: Option<&(dyn Fn(usize, usize) + Send + Sync)>,
 ) -> (Vec<PersonAnalysis>, AnalysisStats) {
     let mut grouped: HashMap<&str, Vec<&Record>> = HashMap::new();
     let mut scoped_records = 0;
@@ -86,9 +88,21 @@ pub fn analyze_records(
         grouped.entry(&record.person_key).or_default().push(record);
     }
 
+    let total = grouped.len();
+    if let Some(f) = on_progress {
+        f(0, total);
+    }
+    let counter = AtomicUsize::new(0);
     let mut analyses: Vec<PersonAnalysis> = grouped
         .into_par_iter()
-        .map(|(_, group)| analyze_person(group, settings))
+        .map(|(_, group)| {
+            let result = analyze_person(group, settings);
+            if let Some(f) = on_progress {
+                let done = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                f(done, total);
+            }
+            result
+        })
         .collect();
     if analyses.len() >= PARALLEL_SORT_THRESHOLD {
         analyses.par_sort_unstable_by(compare_analyses);
@@ -715,14 +729,15 @@ mod tests {
     fn same_room_overlap_alerts_and_different_room_scores_higher() {
         let first = record(1, "301", "2026-05-01 09:30", "2026-05-01 13:00");
         let same = record(2, "301", "2026-05-01 10:00", "2026-05-01 12:00");
-        let same_result = analyze_records(&[first.clone(), same], &AnalysisSettings::default()).0;
+        let same_result =
+            analyze_records(&[first.clone(), same], &AnalysisSettings::default(), None).0;
         let same_alert = &same_result[0].alerts[0];
         assert_eq!(same_alert.kind, "overlap");
         assert_eq!(same_alert.score, 22);
         assert_eq!(same_alert.severity, "中");
 
         let other = record(3, "302", "2026-05-01 10:00", "2026-05-01 12:00");
-        let other_result = analyze_records(&[first, other], &AnalysisSettings::default()).0;
+        let other_result = analyze_records(&[first, other], &AnalysisSettings::default(), None).0;
         assert_eq!(other_result[0].alerts[0].score, 27);
         assert_eq!(other_result[0].alerts[0].severity, "高");
     }
@@ -748,7 +763,7 @@ mod tests {
                 .and_hms_opt(23, 59, 59),
             ..Default::default()
         };
-        let analyses = analyze_records(&records, &settings).0;
+        let analyses = analyze_records(&records, &settings, None).0;
         assert_eq!(analyses[0].alerts.len(), 1);
         assert_eq!(analyses[0].alerts[0].kind, "window_frequency");
         assert_eq!(analyses[0].alerts[0].score, 51);
@@ -771,7 +786,7 @@ mod tests {
                 .and_hms_opt(23, 59, 0),
             ..Default::default()
         };
-        let (analyses, stats) = analyze_records(&records, &settings);
+        let (analyses, stats) = analyze_records(&records, &settings, None);
         assert_eq!(analyses[0].summary.total_records, 2);
         assert_eq!(stats.records, 2);
         assert_eq!(analyses[0].alerts[0].evidence_ids, vec![2, 3]);
@@ -795,7 +810,7 @@ mod tests {
                 .and_hms_opt(23, 59, 59),
             ..Default::default()
         };
-        let analyses = analyze_records(&records, &settings).0;
+        let analyses = analyze_records(&records, &settings, None).0;
         assert_eq!(analyses[0].summary.total_records, 4);
         assert!(analyses[0]
             .alerts
@@ -811,7 +826,7 @@ mod tests {
         second.city = "杭州市".into();
         second.county = "西湖区".into();
         second.region = "浙江省杭州市西湖区".into();
-        let analyses = analyze_records(&[first, second], &AnalysisSettings::default()).0;
+        let analyses = analyze_records(&[first, second], &AnalysisSettings::default(), None).0;
         assert_eq!(analyses[0].summary.hotel_regions.len(), 2);
 
         let mut serialized = serde_json::to_value(&analyses[0].summary).unwrap();
@@ -846,7 +861,7 @@ mod tests {
                 item
             })
             .collect::<Vec<_>>();
-        let summary = &analyze_records(&records, &AnalysisSettings::default()).0[0].summary;
+        let summary = &analyze_records(&records, &AnalysisSettings::default(), None).0[0].summary;
         assert_eq!(
             summary.hotel_names,
             ["甲", "乙", "丙", "丁", "戊", "己", "庚"]
@@ -881,7 +896,7 @@ mod tests {
                 item
             })
             .collect::<Vec<_>>();
-        let analyses = analyze_records(&records, &AnalysisSettings::default()).0;
+        let analyses = analyze_records(&records, &AnalysisSettings::default(), None).0;
         assert_eq!(analyses.len(), PARALLEL_SORT_THRESHOLD + 4);
         assert_eq!(analyses[0].summary.person_key, "id:000000000000000000");
         assert_eq!(
@@ -893,7 +908,7 @@ mod tests {
     #[test]
     fn analysis_regression_checksum() {
         let records = regression_records();
-        let rolling = analyze_records(&records, &AnalysisSettings::default());
+        let rolling = analyze_records(&records, &AnalysisSettings::default(), None);
         let selected_settings = AnalysisSettings {
             frequency_mode: FrequencyMode::Selected,
             frequency_start: NaiveDate::from_ymd_opt(2026, 5, 1)
@@ -905,7 +920,7 @@ mod tests {
             frequency_threshold: 2,
             ..Default::default()
         };
-        let selected = analyze_records(&records, &selected_settings);
+        let selected = analyze_records(&records, &selected_settings, None);
         let rolling_checksum = checksum_json(&rolling);
         let selected_checksum = checksum_json(&selected);
         println!(
@@ -923,7 +938,7 @@ mod tests {
             benchmark_size("MAIYIN_ANALYSIS_BENCH_RECORDS", 453_506).max(people_count);
         let records = sparse_benchmark_records(people_count, records_count);
         let started = Instant::now();
-        let (analyses, stats) = analyze_records(&records, &AnalysisSettings::default());
+        let (analyses, stats) = analyze_records(&records, &AnalysisSettings::default(), None);
         let elapsed = started.elapsed();
         println!(
             "analysis_benchmark=sparse records={} people={} analysis_ms={}",
@@ -956,7 +971,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let started = Instant::now();
-        let (analyses, stats) = analyze_records(&records, &AnalysisSettings::default());
+        let (analyses, stats) = analyze_records(&records, &AnalysisSettings::default(), None);
         let elapsed = started.elapsed();
         println!(
             "analysis_benchmark=dense_overlap records={} pairs={} analysis_ms={}",

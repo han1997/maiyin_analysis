@@ -1,6 +1,16 @@
 export type RiskLevel = "高风险" | "中风险" | "关注" | "正常";
 export type Severity = "高" | "中" | "低";
 
+/** Progress payload streamed from Rust via a Tauri 2 `Channel` during long-running
+ * import / analysis operations. `total === 0` marks an indeterminate phase that only
+ * carries a human-readable label (e.g. the save step). */
+export interface Progress {
+  phase: string;
+  current: number;
+  total: number;
+  label: string;
+}
+
 export interface AnalysisSettings {
   frequencyMode: "rolling" | "selected";
   frequencyStart: string | null;

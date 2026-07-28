@@ -116,7 +116,7 @@ fn sample_record(uid: u64, day: Option<u32>) -> Record {
 }
 
 fn analyzed_session(records: Vec<Record>) -> StoredSession {
-    let (analyses, stats) = analyze_records(&records, &AnalysisSettings::default());
+    let (analyses, stats) = analyze_records(&records, &AnalysisSettings::default(), None);
     StoredSession {
         schema_version: CURRENT_SCHEMA_VERSION,
         session_id: "session-1".into(),
@@ -1231,7 +1231,7 @@ fn replacing_analysis_preserves_records_and_record_indexes() {
             .and_hms_opt(23, 59, 59),
         ..Default::default()
     };
-    let (mut analyses, stats) = analyze_records(&session.records, &settings);
+    let (mut analyses, stats) = analyze_records(&session.records, &settings, None);
     analyses[0].summary.name = "替换姓名".into();
     store
         .replace_analysis(
@@ -1344,7 +1344,7 @@ fn benchmark_analysis_only_replacement() {
     let mut full_session = full_store.load(&session.session_id).unwrap();
     let full_load_elapsed = full_load_started.elapsed();
     let full_analysis_started = Instant::now();
-    let (full_analyses, full_stats) = analyze_records(&full_session.records, &settings);
+    let (full_analyses, full_stats) = analyze_records(&full_session.records, &settings, None);
     let full_analysis_elapsed = full_analysis_started.elapsed();
     full_session.schema_version = CURRENT_SCHEMA_VERSION;
     full_session.settings = settings.clone();
@@ -1360,7 +1360,7 @@ fn benchmark_analysis_only_replacement() {
     let (_, records) = partial_store.load_records(&session.session_id).unwrap();
     let partial_load_elapsed = partial_load_started.elapsed();
     let partial_analysis_started = Instant::now();
-    let (partial_analyses, partial_stats) = analyze_records(&records, &settings);
+    let (partial_analyses, partial_stats) = analyze_records(&records, &settings, None);
     let partial_analysis_elapsed = partial_analysis_started.elapsed();
     let partial_persist_started = Instant::now();
     partial_store
@@ -1422,10 +1422,10 @@ fn benchmark_real_import_pipeline() {
         .collect::<Vec<_>>();
     let total_started = Instant::now();
     let parse_started = Instant::now();
-    let imported = import_paths(&paths).unwrap();
+    let imported = import_paths(&paths, None).unwrap();
     let parse_elapsed = parse_started.elapsed();
     let analysis_started = Instant::now();
-    let (analyses, stats) = analyze_records(&imported.records, &AnalysisSettings::default());
+    let (analyses, stats) = analyze_records(&imported.records, &AnalysisSettings::default(), None);
     let analysis_elapsed = analysis_started.elapsed();
     let (root, store) = test_store();
     let session = StoredSession {

@@ -21,6 +21,7 @@ import type {
   PersonDetail,
   PersonPage,
   PersonQuery,
+  Progress,
   RiskLevel,
   WorkspaceSnapshot,
 } from "./domain/types";
@@ -89,6 +90,7 @@ const initialRecordsPage: ImportedRecordsPage = {
 function App() {
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot | null>(null);
   const [busy, setBusy] = useState<BusyAction>("boot");
+  const [progress, setProgress] = useState<Progress | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [query, setQuery] = useState<PersonQuery>(initialQuery);
   const [page, setPage] = useState<PersonPage>(initialPage);
@@ -258,6 +260,7 @@ function App() {
       return false;
     } finally {
       setBusy(null);
+      setProgress(null);
     }
   }
 
@@ -292,7 +295,7 @@ function App() {
       return;
     }
     setSettingsOpen(false);
-    const completed = await runSnapshotAction("reanalyze", () => appApi.reanalyze(draftSettings));
+    const completed = await runSnapshotAction("reanalyze", () => appApi.reanalyze(draftSettings, setProgress));
     if (completed) setToast({ tone: "success", message: "已按新的分析口径重新计算。" });
   }
 
@@ -417,17 +420,21 @@ function App() {
             <span className="section-hint">XLS · XLSX · CSV</span>
           </div>
           <div className="import-actions">
-            <button className="button button-primary" type="button" disabled={busy !== null} onClick={() => runSnapshotAction("import", () => appApi.importFiles())}>
+            <button className="button button-primary" type="button" disabled={busy !== null} onClick={() => runSnapshotAction("import", () => appApi.importFiles(setProgress))}>
               <Icon name="upload" /> 选择文件
             </button>
-            <button className="button button-secondary" type="button" disabled={busy !== null} onClick={() => runSnapshotAction("import", () => appApi.importFolder())}>
+            <button className="button button-secondary" type="button" disabled={busy !== null} onClick={() => runSnapshotAction("import", () => appApi.importFolder(setProgress))}>
               <Icon name="folder" /> 选择文件夹
             </button>
           </div>
           {busy === "import" && (
             <div className="inline-progress" role="status">
-              <span className="progress-track"><span /></span>
-              <p>正在读取并规范化数据，请勿关闭窗口</p>
+              <span className="progress-track">
+                {progress && progress.total > 0
+                  ? <span className="progress-fill" style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }} />
+                  : <span />}
+              </span>
+              <p>{progress?.label ?? "正在读取并规范化数据，请勿关闭窗口"}</p>
             </div>
           )}
         </section>
@@ -466,7 +473,7 @@ function App() {
             className="button button-secondary full-width"
             type="button"
             disabled={selectedSessions.size < 2 || busy !== null}
-            onClick={() => runSnapshotAction("session", () => appApi.mergeSessions([...selectedSessions]))}
+            onClick={() => runSnapshotAction("session", () => appApi.mergeSessions([...selectedSessions], setProgress))}
           >
             <Icon name="archive" /> 合并所选 {selectedSessions.size > 1 ? `${selectedSessions.size} 条` : ""}
           </button>
@@ -517,7 +524,7 @@ function App() {
               <input type="checkbox" checked={showSensitive} onChange={(event) => setShowSensitive(event.target.checked)} />
               <span>显示完整身份信息</span>
             </label>
-            <button className="button button-secondary" type="button" disabled={busy !== null || snapshot.mode === "empty"} onClick={() => runSnapshotAction("reanalyze", () => appApi.reanalyze(snapshot.settings))}>
+            <button className="button button-secondary" type="button" disabled={busy !== null || snapshot.mode === "empty"} onClick={() => runSnapshotAction("reanalyze", () => appApi.reanalyze(snapshot.settings, setProgress))}>
               <Icon name="refresh" /> 重新分析
             </button>
           </div>
@@ -557,7 +564,7 @@ function App() {
         )}
 
         {snapshot.mode === "empty" ? (
-          <EmptyWorkspace onFiles={() => runSnapshotAction("import", () => appApi.importFiles())} onFolder={() => runSnapshotAction("import", () => appApi.importFolder())} />
+          <EmptyWorkspace onFiles={() => runSnapshotAction("import", () => appApi.importFiles(setProgress))} onFolder={() => runSnapshotAction("import", () => appApi.importFolder(setProgress))} />
         ) : (
           activeView === "records" ? (
             <ImportedRecordsTable
@@ -751,7 +758,20 @@ function App() {
         />
       )}
 
-      {busy && busy !== "boot" && busy !== "import" && <div className="busy-line" aria-hidden="true" />}
+      {busy && busy !== "boot" && busy !== "import" && (
+        progress ? (
+          <div className="progress-line" role="status" aria-label={progress.label}>
+            <span className="progress-line-bar">
+              {progress.total > 0
+                ? <span className="progress-line-fill" style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }} />
+                : <span className="progress-line-fill-indeterminate" />}
+            </span>
+            <span className="progress-line-label">{progress.label}</span>
+          </div>
+        ) : (
+          <div className="busy-line" aria-hidden="true" />
+        )
+      )}
       {toast && <div className={`toast toast-${toast.tone}`} role="status"><Icon name={toast.tone === "error" ? "warning" : "info"} size={17} /><span>{toast.message}</span><button type="button" aria-label="关闭提示" onClick={() => setToast(null)}><Icon name="close" size={15} /></button></div>}
     </div>
   );

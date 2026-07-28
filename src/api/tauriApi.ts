@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { AnalysisSettings, ExportKind, ImportedRecordsPage, ImportedRecordsQuery, OperationResult, PersonDetail, PersonPage, PersonQuery } from "../domain/types";
+import type { AnalysisSettings, ExportKind, ImportedRecordsPage, ImportedRecordsQuery, OperationResult, PersonDetail, PersonPage, PersonQuery, Progress } from "../domain/types";
 import type { AppApi } from "./contract";
 
 async function selectPaths(directory: boolean): Promise<string[]> {
@@ -15,25 +15,31 @@ async function selectPaths(directory: boolean): Promise<string[]> {
   return Array.isArray(selection) ? selection : [selection];
 }
 
+function createProgressChannel(onProgress?: (p: Progress) => void): Channel<Progress> {
+  const channel = new Channel<Progress>();
+  channel.onmessage = (p) => onProgress?.(p);
+  return channel;
+}
+
 export const tauriApi: AppApi = {
   runtime: "tauri",
   bootstrap: () => invoke("bootstrap_workspace"),
 
-  async importFiles() {
+  async importFiles(onProgress?: (p: Progress) => void) {
     const paths = await selectPaths(false);
-    return paths.length ? invoke("import_paths", { paths }) : null;
+    return paths.length ? invoke("import_paths", { paths, onProgress: createProgressChannel(onProgress) }) : null;
   },
 
-  async importFolder() {
+  async importFolder(onProgress?: (p: Progress) => void) {
     const paths = await selectPaths(true);
-    return paths.length ? invoke("import_folders", { paths }) : null;
+    return paths.length ? invoke("import_folders", { paths, onProgress: createProgressChannel(onProgress) }) : null;
   },
 
   loadSession: (sessionId) => invoke("load_session", { sessionId }),
-  mergeSessions: (sessionIds) => invoke("merge_sessions", { sessionIds }),
+  mergeSessions: (sessionIds, onProgress?: (p: Progress) => void) => invoke("merge_sessions", { sessionIds, onProgress: createProgressChannel(onProgress) }),
   deleteSession: (sessionId) => invoke("delete_session", { sessionId }),
   clearWorkspace: () => invoke("clear_workspace"),
-  reanalyze: (settings: AnalysisSettings) => invoke("reanalyze", { settings }),
+  reanalyze: (settings: AnalysisSettings, onProgress?: (p: Progress) => void) => invoke("reanalyze", { settings, onProgress: createProgressChannel(onProgress) }),
   queryPeople: (query: PersonQuery): Promise<PersonPage> => invoke("query_people", { query }),
   getPersonDetail: (personKey): Promise<PersonDetail> => invoke("get_person_detail", { personKey }),
   getImportedRecords: (query: ImportedRecordsQuery): Promise<ImportedRecordsPage> => invoke("get_imported_records", { query }),

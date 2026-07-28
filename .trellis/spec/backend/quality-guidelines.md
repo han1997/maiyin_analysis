@@ -141,6 +141,50 @@ threshold-switched fast path for pathological inputs, and document which
 evidence fields are approximated and why the approximation is safe
 (conservative direction, capped score, or untested edge case).
 
+### Tauri 2 Channel-based progress reporting
+
+Long-running Tauri commands (`import_paths`, `import_folders`, `reanalyze`,
+`merge_sessions`) stream phase/percent updates to the WebView via
+`tauri::ipc::Channel<ProgressPayload>` injected as a command parameter. The
+pattern keeps the domain layer Tauri-agnostic and the throttle in the command
+layer:
+
+- **Domain layer stays Tauri-agnostic**: `analyze_records` and
+  `importer::import_paths` accept
+  `on_progress: Option<&(dyn Fn(usize, usize) + Send + Sync)>` (raw
+  `(current, total)` callback, no Tauri types). The callback is `&dyn Fn` (not
+  `FnMut`) so it can be captured by reference inside Rayon `par_iter` closures.
+  When `None`, the `if let Some(f) = on_progress { f(...) }` guard is zero-cost.
+  Inside the parallel loop, an `AtomicUsize` counter increments via
+  `fetch_add(1, Ordering::Relaxed)` and calls the callback; the FIRST call
+  passes `(0, total)` so the channel learns the real total before items start.
+- **Command layer owns Tauri specifics + throttle**: `commands.rs` defines the
+  serializable `ProgressPayload { phase, current, total, label }` (serde
+  camelCase) and a `make_progress_callback(channel, phase, total, template)`
+  helper returning `Arc<dyn Fn(usize, usize) + Send + Sync>`. The closure
+  captures an `Instant`/`AtomicU64` last-emit timestamp; it emits when
+  `elapsed > 50ms` OR `current == total` OR first call (`last == 0`). This
+  caps IPC at ~20 events/sec regardless of Rayon throughput.
+- **Validation before emit**: `validate_settings` (reanalyze) and
+  `session_ids.len() < 2` (merge) run BEFORE any `channel.send(...)`. Error
+  paths produce no progress events — the frontend never sees a progress bar
+  for a request that will immediately fail validation.
+- **Phase sequence**: each command emits a start `{current: 0, total, label}`
+  per phase, intermediate throttled updates, then an end
+  `{current: total, total, label}`. `total = 0` marks an indeterminate phase
+  (e.g. "saving") — the frontend shows the label with an indeterminate bar.
+- **Frontend companion state**: `progress: useState<Progress | null>(null)` is
+  a companion to the existing `busy` action enum. `busy` remains the single
+  loading-state coordinator (gates button disabling); `progress` only feeds
+  the progress UI. Both are cleared together in the `runSnapshotAction`
+  `finally` block. Determinate bar renders when `total > 0`; indeterminate
+  fallback when `total === 0` or `progress === null`.
+
+Generalize this pattern when a Tauri command wraps a long `spawn_blocking`:
+inject a `Channel<T>` parameter, keep the domain callback Tauri-agnostic,
+throttle in the command layer, and emit validation-before-progress so error
+paths stay silent.
+
 
 ---
 
