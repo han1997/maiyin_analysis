@@ -326,12 +326,13 @@ function App() {
     try {
       setExportMenuOpen(false);
       setBusy("export");
-      const result = await appApi.exportResult(kind);
+      const result = await appApi.exportResult(kind, setProgress);
       setToast({ tone: result.path ? "success" : "info", message: result.message });
     } catch (error) {
       setToast({ tone: "error", message: errorMessage(error) });
     } finally {
       setBusy(null);
+      setProgress(null);
     }
   }
 

@@ -417,46 +417,27 @@ impl SessionStore {
         Ok((metadata, records))
     }
 
+    /// Load only session metadata and analyses (summaries + alerts), skipping the
+    /// potentially large `records` collection. Used by `summary_csv` export so a
+    /// 45 万-record session does not deserialize records just to write per-person
+    /// summary rows.
+    pub fn load_analyses(
+        &self,
+        session_id: &str,
+    ) -> Result<(SessionMetadata, Vec<PersonAnalysis>), AppError> {
+        let _read_guard = self.lock_reads()?;
+        let connection = self.connection()?;
+        let metadata = metadata_from(&connection, session_id)?;
+        let analyses = load_session_analyses(&connection, session_id)?;
+        Ok((metadata, analyses))
+    }
+
     pub fn load(&self, session_id: &str) -> Result<StoredSession, AppError> {
         let _read_guard = self.lock_reads()?;
         let connection = self.connection()?;
         let metadata = metadata_from(&connection, session_id)?;
         let records = load_session_records(&connection, session_id)?;
-
-        let mut alerts_by_person: HashMap<String, Vec<AlertSummary>> = HashMap::new();
-        {
-            let mut statement = connection
-                .prepare(
-                    "SELECT person_key, alert_json FROM alerts \
-                     WHERE session_id = ?1 ORDER BY person_key, alert_index",
-                )
-                .map_err(sql_error)?;
-            let mut rows = statement.query([session_id]).map_err(sql_error)?;
-            while let Some(row) = rows.next().map_err(sql_error)? {
-                let person_key: String = row.get(0).map_err(sql_error)?;
-                let payload: String = row.get(1).map_err(sql_error)?;
-                alerts_by_person
-                    .entry(person_key)
-                    .or_default()
-                    .push(from_json(&payload)?);
-            }
-        }
-
-        let summaries = load_json_column::<PersonSummary>(
-            &connection,
-            "SELECT summary_json FROM people WHERE session_id = ?1 \
-             ORDER BY score DESC, total_records DESC, name ASC, person_key ASC",
-            session_id,
-        )?;
-        let analyses = summaries
-            .into_iter()
-            .map(|summary| PersonAnalysis {
-                alerts: alerts_by_person
-                    .remove(&summary.person_key)
-                    .unwrap_or_default(),
-                summary,
-            })
-            .collect();
+        let analyses = load_session_analyses(&connection, session_id)?;
 
         Ok(StoredSession {
             schema_version: metadata.schema_version,
@@ -979,6 +960,49 @@ fn load_session_records(
         "SELECT record_json FROM records WHERE session_id = ?1 ORDER BY uid",
         session_id,
     )
+}
+
+/// Load analyses (summaries + alerts) without the records collection. Shared by
+/// `SessionStore::load` and `SessionStore::load_analyses` so the export paths can
+/// avoid deserializing 45 万 records when only per-person summaries are needed.
+fn load_session_analyses(
+    connection: &Connection,
+    session_id: &str,
+) -> Result<Vec<PersonAnalysis>, AppError> {
+    let mut alerts_by_person: HashMap<String, Vec<AlertSummary>> = HashMap::new();
+    {
+        let mut statement = connection
+            .prepare(
+                "SELECT person_key, alert_json FROM alerts \
+                 WHERE session_id = ?1 ORDER BY person_key, alert_index",
+            )
+            .map_err(sql_error)?;
+        let mut rows = statement.query([session_id]).map_err(sql_error)?;
+        while let Some(row) = rows.next().map_err(sql_error)? {
+            let person_key: String = row.get(0).map_err(sql_error)?;
+            let payload: String = row.get(1).map_err(sql_error)?;
+            alerts_by_person
+                .entry(person_key)
+                .or_default()
+                .push(from_json(&payload)?);
+        }
+    }
+
+    let summaries = load_json_column::<PersonSummary>(
+        connection,
+        "SELECT summary_json FROM people WHERE session_id = ?1 \
+         ORDER BY score DESC, total_records DESC, name ASC, person_key ASC",
+        session_id,
+    )?;
+    Ok(summaries
+        .into_iter()
+        .map(|summary| PersonAnalysis {
+            alerts: alerts_by_person
+                .remove(&summary.person_key)
+                .unwrap_or_default(),
+            summary,
+        })
+        .collect())
 }
 
 fn load_json_column<T: serde::de::DeserializeOwned>(

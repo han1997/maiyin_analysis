@@ -24,6 +24,6 @@ export interface AppApi {
   queryPeople(query: PersonQuery): Promise<PersonPage>;
   getPersonDetail(personKey: string): Promise<PersonDetail>;
   getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsPage>;
-  exportResult(kind: ExportKind): Promise<OperationResult>;
+  exportResult(kind: ExportKind, onProgress?: (p: Progress) => void): Promise<OperationResult>;
   chooseStorageDirectory(): Promise<OperationResult | null>;
 }

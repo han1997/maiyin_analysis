@@ -43,7 +43,7 @@ export const tauriApi: AppApi = {
   queryPeople: (query: PersonQuery): Promise<PersonPage> => invoke("query_people", { query }),
   getPersonDetail: (personKey): Promise<PersonDetail> => invoke("get_person_detail", { personKey }),
   getImportedRecords: (query: ImportedRecordsQuery): Promise<ImportedRecordsPage> => invoke("get_imported_records", { query }),
-  async exportResult(kind: ExportKind): Promise<OperationResult> {
+  async exportResult(kind: ExportKind, onProgress?: (p: Progress) => void): Promise<OperationResult> {
     const definitions: Record<ExportKind, { defaultPath: string; name: string; extensions: string[] }> = {
       summary_csv: { defaultPath: "人员汇总.csv", name: "CSV 文件", extensions: ["csv"] },
       risk_xlsx: { defaultPath: "风险合并.xlsx", name: "Excel 工作簿", extensions: ["xlsx"] },
@@ -56,7 +56,7 @@ export const tauriApi: AppApi = {
       filters: [{ name: definition.name, extensions: definition.extensions }],
     });
     if (!path) return { message: "已取消导出。" };
-    return invoke("export_result", { kind, path });
+    return invoke("export_result", { kind, path, onProgress: createProgressChannel(onProgress) });
   },
 
   async chooseStorageDirectory() {

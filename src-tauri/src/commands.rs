@@ -1,6 +1,8 @@
 use crate::analysis::analyze_records;
 use crate::error::{AppError, CommandError};
-use crate::exporter::{export_to, OperationResult};
+use crate::exporter::{
+    export_raw_csv, export_risk_xlsx, export_summary_csv, export_template, OperationResult,
+};
 use crate::importer;
 use crate::model::{
     AnalysisSettings, FrequencyMode, ImportedRecordsPage, ImportedRecordsQuery, PersonDetail,
@@ -382,12 +384,56 @@ pub async fn get_imported_records(
 pub async fn export_result(
     kind: String,
     path: String,
+    on_progress: tauri::ipc::Channel<ProgressPayload>,
     state: State<'_, AppState>,
 ) -> Result<OperationResult, CommandError> {
     let (store, session_id) = current_store(&state)?;
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let session = store.load(&session_id)?;
-        export_to(&kind, &session, &PathBuf::from(path))
+        let path = PathBuf::from(path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| AppError::Export(format!("无法创建导出目录：{error}")))?;
+        }
+        match kind.as_str() {
+            "summary_csv" => {
+                // Only analyses (summaries) are needed; skip deserializing records.
+                let (_, analyses) = store.load_analyses(&session_id)?;
+                let cb = make_progress_callback(
+                    on_progress.clone(),
+                    "exporting",
+                    "正在生成人员汇总 {current}/{total}",
+                );
+                export_summary_csv(&path, &analyses, Some(&*cb))?;
+            }
+            "raw_csv" => {
+                // Only records + settings are needed; skip deserializing analyses.
+                let (metadata, records) = store.load_records(&session_id)?;
+                let cb = make_progress_callback(
+                    on_progress.clone(),
+                    "exporting",
+                    "正在生成原始明细 {current}/{total}",
+                );
+                export_raw_csv(&path, &records, &metadata.settings, Some(&*cb))?;
+            }
+            "risk_xlsx" => {
+                // Risk export needs both analyses (alerts) and records (evidence).
+                let session = store.load(&session_id)?;
+                let cb = make_progress_callback(
+                    on_progress.clone(),
+                    "exporting",
+                    "正在生成风险合并 {current}/{total}",
+                );
+                export_risk_xlsx(&path, &session.analyses, &session.records, Some(&*cb))?;
+            }
+            "template_xlsx" => {
+                export_template(&path)?;
+            }
+            _ => return Err(AppError::Validation("未知导出类型".into())),
+        }
+        Ok(OperationResult {
+            message: format!("已导出到 {}", path.display()),
+            path: Some(path.to_string_lossy().into_owned()),
+        })
     })
     .await
     .map_err(task_error)??;

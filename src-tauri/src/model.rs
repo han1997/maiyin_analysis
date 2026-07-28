@@ -161,6 +161,10 @@ pub struct PersonSummary {
     pub age: Option<u8>,
     pub gender: String,
     pub total_records: usize,
+    /// Count of this person's records that fall inside the analysis time window.
+    /// Populated during analysis; legacy sessions default to 0 via `#[serde(default)]`.
+    #[serde(default)]
+    pub frequency_window_count: usize,
     #[serde(default)]
     pub max_week_count: usize,
     #[serde(default)]

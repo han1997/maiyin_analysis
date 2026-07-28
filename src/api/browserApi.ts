@@ -201,6 +201,7 @@ export const browserApi: AppApi = {
     };
   },
 
+  // Browser preview ignores the optional progress callback; Tauri owns export.
   async exportResult(kind: ExportKind) {
     await pause(480);
     const labels: Record<ExportKind, string> = {

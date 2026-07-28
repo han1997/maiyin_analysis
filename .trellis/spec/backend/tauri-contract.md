@@ -21,21 +21,42 @@ reanalyze(settings: AnalysisSettings, on_progress: Channel<ProgressPayload>) -> 
 query_people(query: PersonQuery) -> Result<PersonPage, CommandError>
 get_person_detail(person_key: String) -> Result<PersonDetail, CommandError>
 get_imported_records(query: ImportedRecordsQuery) -> Result<ImportedRecordsPage, CommandError>
-export_result(kind: String, path: String) -> Result<OperationResult, CommandError>
+export_result(kind: String, path: String, on_progress: Channel<ProgressPayload>) -> Result<OperationResult, CommandError>
 ```
 
-Long-running commands (`import_paths`, `import_folders`, `reanalyze`, `merge_sessions`)
-accept `on_progress: tauri::ipc::Channel<ProgressPayload>` to stream phase/percent
+Long-running commands (`import_paths`, `import_folders`, `reanalyze`,
+`merge_sessions`, `export_result`) accept
+`on_progress: tauri::ipc::Channel<ProgressPayload>` to stream phase/percent
 updates to the WebView during `spawn_blocking` work. The Channel is per-call (frontend
 `new Channel()` per invoke) and carries `ProgressPayload { phase, current, total, label }`
 (serde camelCase; `total = 0` = indeterminate phase, label-only). Validation checks
 (`validate_settings`, `session_ids.len() < 2`) run BEFORE any emit so error paths
-produce no spurious progress. The domain layer (`analyze_records`, `importer::import_paths`)
-stays Tauri-agnostic via `Option<&dyn Fn(usize, usize) + Send + Sync>`; `commands.rs`
-owns the throttle (50ms) and payload construction. See
-[`quality-guidelines.md`](./quality-guidelines.md) "Tauri 2 Channel-based progress
-reporting" for the reusable pattern. The returned `WorkspaceSnapshot` is unchanged —
-progress is a side-channel, not a response field.
+produce no spurious progress. The domain layer (`analyze_records`,
+`importer::import_paths`, `exporter::export_*`) stays Tauri-agnostic via
+`Option<&dyn Fn(usize, usize) + Send + Sync>`; `commands.rs` owns the throttle (50ms)
+and payload construction. See [`quality-guidelines.md`](./quality-guidelines.md)
+"Tauri 2 Channel-based progress reporting" for the reusable pattern. The returned
+`WorkspaceSnapshot` and `OperationResult` are unchanged — progress is a side-channel,
+not a response field.
+
+### Export formats and per-kind loading
+
+`export_result` dispatches to one of four exporters in `exporter.rs`. Each kind loads
+only the data it needs (split loading):
+
+| Kind | Loader | Columns | Format |
+|---|---|---|---|
+| `summary_csv` | `SessionStore::load_analyses` (no records deserialized) | 18 | CSV, UTF-8 BOM, `safe()` formula-injection guard, split household 省/市/县区 + `frequencyWindowCount` |
+| `raw_csv` | `SessionStore::load_records` (no analyses deserialized) | 23 | CSV, UTF-8 BOM, `safe()` guard, split household + `age`/`gender` + typed `NaiveDateTime` formatting `%Y-%m-%d %H:%M` |
+| `risk_xlsx` | `SessionStore::load` (needs analyses + records for evidence map) | 26 | XLSX sheet "风险合并明细", vertical-merged 14-col person block + 12-col evidence rows, `ALERT_KIND_LABELS` Chinese mapping, per-level colors (高/中/关注/正常), `freeze_panes(1,0)` + `autofilter`, numeric `sourceRow`/`score`/`age` via `write_number` |
+| `template_xlsx` | static `include_bytes!` copy | — | bundled template, no computation |
+
+Column headers, `ALERT_KIND_LABELS`, and color hex values are pinned by tests that
+read back the output with calamine. The `safe()` helper returns `Cow<'_, str>` (zero
+clone for safe values) to avoid million-allocation overhead on large raw exports.
+The `risk_xlsx` person-block merged cells use the merge-placeholder-then-overwrite
+idiom for numeric cells: register the merge with a blank, then `write_number` the
+first cell so Excel treats it as a number (not "Number stored as text").
 
 The TypeScript `AppApi` mirrors these operations. Browser mode implements the same interface with fixture data and never claims that fixture data was parsed from a local file.
 
@@ -110,7 +131,11 @@ Storage rules:
 - Rust storage tests for SQLite round-trip, paginated filters, transaction rollback, active-session deletion, and storage-root copying.
 - Rust storage/command tests for final-session file reset, FTS rowid cleanup, missing-session
   errors, and keeping other sessions after deletion.
-- Export tests for UTF-8 BOM, full identity values, formula-injection prefixing, and risk workbook rows.
+- Export tests for UTF-8 BOM, full identity values, formula-injection prefixing, 18-col
+  summary with split household, 23-col raw with formatted dates and `age`/`gender`,
+  risk workbook sheet name `风险合并明细`, 26-col headers, vertical-merged person block,
+  per-level colors, `ALERT_KIND_LABELS` Chinese mapping, numeric `score`/`age`/`source_row`,
+  `freeze_panes` + `autofilter`, and the progress callback contract.
 - TypeScript tests for search across identity/household/alert text, level/alert filters, and first render of browser preview.
 - Cross-layer assertions must verify camelCase DTO fields and structured `{ code, message }` errors.
 - Reanalysis storage tests must prove unchanged record rowids/search documents survive and
@@ -332,11 +357,12 @@ appApi.getImportedRecords(query: ImportedRecordsQuery): Promise<ImportedRecordsP
   single-field filters; combined filters and selected time windows still use exact
   row-level SQLite predicates.
 - `PersonSummary` includes `householdProvince`, `householdCity`, `householdCounty`,
-  `maxWeekCount`, `maxMonthCount`, `maxYearCount`, `hotelNames`, and `hotelRegions`.
-  Structured household fields and all three max-count fields use serde defaults and are
-  optional in TypeScript for legacy payload compatibility. Missing max-count fields
-  deserialize to zero, while newly analyzed summaries still serialize all three camelCase
-  fields. Each hotel-region entry is
+  `maxWeekCount`, `maxMonthCount`, `maxYearCount`, `frequencyWindowCount`,
+  `hotelNames`, and `hotelRegions`.
+  Structured household fields, the three max-count fields, and `frequencyWindowCount`
+  use serde defaults and are optional in TypeScript for legacy payload compatibility.
+  Missing max-count/frequency fields deserialize to zero, while newly analyzed
+  summaries still serialize all four camelCase count fields. Each hotel-region entry is
   `{ province, city, county, region }`; persisted additions use serde defaults.
 - Hotel-name input is split on comma, Chinese comma, enumeration comma,
   semicolon, or newline. Every non-empty term must fuzzy-match at least one

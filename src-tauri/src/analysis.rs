@@ -458,6 +458,9 @@ fn finish_person_analysis(
         age: first.age,
         gender: first.gender.clone(),
         total_records: records.len(),
+        // `records` passed here are already filtered to the analysis time window
+        // by `analyze_records`, so this length is the in-window count.
+        frequency_window_count: records.len(),
         max_week_count: window_counts[0],
         max_month_count: window_counts[1],
         max_year_count: window_counts[2],
@@ -926,8 +929,8 @@ mod tests {
         println!(
             "analysis_regression rolling_checksum={rolling_checksum} selected_checksum={selected_checksum}"
         );
-        assert_eq!(rolling_checksum, 11_531_671_983_614_133_412);
-        assert_eq!(selected_checksum, 7_793_499_981_386_381_458);
+        assert_eq!(rolling_checksum, 13_151_983_103_127_758_480);
+        assert_eq!(selected_checksum, 15_070_068_273_784_043_574);
     }
 
     #[test]

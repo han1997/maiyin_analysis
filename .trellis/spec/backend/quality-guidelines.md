@@ -185,6 +185,39 @@ inject a `Channel<T>` parameter, keep the domain callback Tauri-agnostic,
 throttle in the command layer, and emit validation-before-progress so error
 paths stay silent.
 
+### Export split loading and format pinning
+
+Export commands load only the data each format needs, not the full
+`StoredSession` (which holds both `records: Vec<Record>` and
+`analyses: Vec<PersonAnalysis>`):
+
+- `summary_csv` → `SessionStore::load_analyses` (summaries + alerts, NO records deserialized).
+- `raw_csv` → `SessionStore::load_records` (records, NO analyses deserialized).
+- `risk_xlsx` → `SessionStore::load` (needs both: analyses for person block +
+  records for the evidence `record_map`).
+- `template_xlsx` → static `include_bytes!` copy, no load.
+
+`load_analyses` and `load` share a `load_session_analyses` helper so the
+summaries+alerts query logic is not duplicated. Adding a new export kind that
+needs only one side MUST use the narrow loader — do not call full `load` when
+only `analyses` or only `records` is needed (a 45万-record session pays a large
+deserialization cost for the unused side).
+
+`safe()` returns `Cow<'_, str>` (borrowed for safe values, owned only when a
+formula-injection prefix is added) to avoid per-field `to_string()` clones on
+large raw exports. CSV `write_record` accepts `Cow` directly.
+
+XLSX merged-cell numerics: `rust_xlsxwriter` `merge_range` accepts only `&str`,
+so numeric cells in a merged person block use the placeholder-then-overwrite
+idiom — register the merge with a blank, then `write_number_with_format` the
+first cell so Excel reads a number (not "Number stored as text"). This applies
+to `score` (col 9) and `age` (col 6) in the risk person block; evidence
+`source_row` is a normal (non-merged) `write_number`.
+
+Export formats (column headers, `ALERT_KIND_LABELS` Chinese mapping, per-level
+color hex values, sheet name) are pinned by read-back tests using calamine so
+format drift surfaces as a failing test, not a silent Excel diff.
+
 
 ---
 
