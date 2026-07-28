@@ -1165,3 +1165,36 @@ lib.rs:39 .expect() 改 .unwrap_or_else() 输出完整 tauri::Error Display 到 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 36: Task #4: analysis-overlap-scanline-for-dense-persons
+
+**Date**: 2026-07-28
+**Task**: Task #4: analysis-overlap-scanline-for-dense-persons
+**Branch**: `main`
+
+### Summary
+
+为 analyze_person 密集人员重叠检测引入阈值切换混合路径。新增 DENSE_OVERLAP_THRESHOLD=32 常量与 detect_dense_day_overlaps 函数：>32 条/日的日走扫描线+住宿分组公式（pair_count 用 BTreeMap 按 effective_end 扫描线，different_place_count 用 HashMap 分组近似，pair_labels 有界采样≤4，evidence_ids 全重叠快捷+involved-set 回退），≤32 条/日保留原 O(n²) 精确路径并通过 dense_day_set 跳过避免重复计数。基准 800 条记录 pairs=319600 analysis_ms=4ms，全绿。trellis-check 移除了未使用的 _record_days 参数。spec: quality-guidelines.md 新增 Threshold-switched hybrid for dense overlap detection 约定。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4606419` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
