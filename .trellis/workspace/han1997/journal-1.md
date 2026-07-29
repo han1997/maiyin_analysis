@@ -1330,3 +1330,36 @@ Added dual-arch build support: rust-toolchain.toml (stable channel), package.jso
 ### Next Steps
 
 - None - task complete
+
+
+## Session 41: importer dedup key benchmark — owned key confirmed non-bottleneck
+
+**Date**: 2026-07-29
+**Task**: importer dedup key benchmark — owned key confirmed non-bottleneck
+**Branch**: `main`
+
+### Summary
+
+审计项 #10 (P3):基准先行评估 dedup key 借用化/预哈希方案。4 次 release 基准(MAIYIN_BENCH_FILES=46, MAIYIN_BENCH_ROWS_PER_FILE=10000, 455500 records):new_merge_ms 平均 ~412ms (403-424ms),old_merge_ms ~1073ms,reduction 61.6%。结论:owned 结构化键在 455k 规模非瓶颈——clone 开销是 minority fraction(估算 50-180ms),真实 xlsx parse 耗时数十秒使 merge 占比 <2%,且借用键需非平凡 lifetime 重构(record 在 insert 后立即 move 进 records)。Phase 2 不执行,无生产代码改动。Spec 记录基准基线防止未来重复调研。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8f8bcc9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
