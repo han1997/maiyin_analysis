@@ -1297,3 +1297,36 @@ lib.rs:39 .expect() 改 .unwrap_or_else() 输出完整 tauri::Error Display 到 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 40: Win7/32-bit & 64-bit dual-arch build support
+
+**Date**: 2026-07-29
+**Task**: Win7/32-bit & 64-bit dual-arch build support
+**Branch**: `main`
+
+### Summary
+
+Added dual-arch build support: rust-toolchain.toml (stable channel), package.json tauri:build + tauri:build:32 scripts, README docs for Win10 1809+ minimum and i686 target setup. Confirmed minimumSystemVersion is macOS/iOS-only (would break Windows bundle config). Updated tauri-contract.md spec with Windows platform support scenario documenting the minimumSystemVersion pitfall. Win7 infeasible due to WebView2 EOL 2023-10.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6c53468` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
