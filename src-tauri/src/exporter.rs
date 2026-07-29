@@ -296,10 +296,7 @@ pub fn export_risk_xlsx(
         "酒店名称",
         "酒店地址",
         "房间号",
-        "省",
-        "市",
         "县区",
-        "地域省市县",
         "入住时间",
         "退房时间",
         "登记时间",
@@ -310,7 +307,7 @@ pub fn export_risk_xlsx(
             .map_err(export_error)?;
     }
     worksheet.set_row_height(0, 28.0).map_err(export_error)?;
-    for column in 0..26u16 {
+    for column in 0..23u16 {
         worksheet
             .set_column_width(column, 15.0)
             .map_err(export_error)?;
@@ -392,7 +389,7 @@ pub fn export_risk_xlsx(
             _ => &normal_format,
         };
 
-        // Write the evidence detail rows at columns 14-25 (one row per record).
+        // Write the evidence detail rows at columns 14-22 (one row per record).
         for (offset, current_row) in (start_row..=end_row).enumerate() {
             if let Some(record) = evidence_records.get(offset) {
                 let detail = [
@@ -400,10 +397,7 @@ pub fn export_risk_xlsx(
                     record.hotel_name.clone(),
                     record.address.clone(),
                     record.room_no.clone(),
-                    record.province.clone(),
-                    record.city.clone(),
                     record.county.clone(),
-                    record.region.clone(),
                     format_datetime(record.check_in),
                     format_datetime(record.check_out),
                     format_datetime(record.register_time),
@@ -431,7 +425,7 @@ pub fn export_risk_xlsx(
                 }
             } else {
                 // `[None]` evidence row: blank detail columns keep the borders intact.
-                for col in 14u16..=25 {
+                for col in 14u16..=22 {
                     worksheet
                         .write_string_with_format(current_row, col, "", &body_format)
                         .map_err(export_error)?;
@@ -484,7 +478,7 @@ pub fn export_risk_xlsx(
     let last_row = row.saturating_sub(1);
     if last_row >= 1 {
         worksheet
-            .autofilter(0, 0, last_row, 25)
+            .autofilter(0, 0, last_row, 22)
             .map_err(export_error)?;
     }
 
@@ -685,15 +679,16 @@ mod tests {
         assert_eq!(workbook.sheet_names(), vec!["风险合并明细".to_string()]);
 
         let range = workbook.worksheet_range("风险合并明细").unwrap();
-        // Row 0: 26-column header.
-        let header: Vec<String> = (0..26)
+        // Row 0: 23-column header.
+        let header: Vec<String> = (0..23)
             .map(|col| range.get((0, col)).map(data_to_string).unwrap_or_default())
             .collect();
         assert_eq!(header[0], "姓名");
         assert_eq!(header[8], "风险等级");
         assert_eq!(header[10], "预警类型");
         assert_eq!(header[14], "源文件");
-        assert_eq!(header[25], "登记时间");
+        assert_eq!(header[19], "县区");
+        assert_eq!(header[22], "登记时间");
 
         // Person block (cols 0-13) is merged across the two evidence rows:
         // values live on row 1, row 2 is blank in the merged region.
@@ -728,7 +723,7 @@ mod tests {
             range.get((1, 6))
         );
 
-        // Evidence detail rows: cols 14-25 carry one record per row.
+        // Evidence detail rows: cols 14-22 carry one record per row.
         assert_eq!(
             range.get((1, 16)).map(data_to_string).unwrap_or_default(),
             "甲旅馆"

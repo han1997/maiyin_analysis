@@ -48,7 +48,7 @@ only the data it needs (split loading):
 |---|---|---|---|
 | `summary_csv` | `SessionStore::load_analyses` (no records deserialized) | 18 | CSV, UTF-8 BOM, `safe()` formula-injection guard, split household 省/市/县区 + `frequencyWindowCount` |
 | `raw_csv` | `SessionStore::load_records` (no analyses deserialized) | 23 | CSV, UTF-8 BOM, `safe()` guard, split household + `age`/`gender` + typed `NaiveDateTime` formatting `%Y-%m-%d %H:%M` |
-| `risk_xlsx` | `SessionStore::load` (needs analyses + records for evidence map) | 26 | XLSX sheet "风险合并明细", vertical-merged 14-col person block + 12-col evidence rows, `ALERT_KIND_LABELS` Chinese mapping, per-level colors (高/中/关注/正常), `freeze_panes(1,0)` + `autofilter`, numeric `sourceRow`/`score`/`age` via `write_number` |
+| `risk_xlsx` | `SessionStore::load` (needs analyses + records for evidence map) | 23 | XLSX sheet "风险合并明细", vertical-merged 14-col person block + 9-col evidence rows (省/市/地域省市县 dropped — always empty in real data; 县区 kept), `ALERT_KIND_LABELS` Chinese mapping, per-level colors (高/中/关注/正常), `freeze_panes(1,0)` + `autofilter`, numeric `sourceRow`/`score`/`age` via `write_number` |
 | `template_xlsx` | static `include_bytes!` copy | — | bundled template, no computation |
 
 Column headers, `ALERT_KIND_LABELS`, and color hex values are pinned by tests that
@@ -133,7 +133,7 @@ Storage rules:
   errors, and keeping other sessions after deletion.
 - Export tests for UTF-8 BOM, full identity values, formula-injection prefixing, 18-col
   summary with split household, 23-col raw with formatted dates and `age`/`gender`,
-  risk workbook sheet name `风险合并明细`, 26-col headers, vertical-merged person block,
+  risk workbook sheet name `风险合并明细`, 23-col headers (省/市/地域省市县 dropped — always empty in real data; 县区 kept), vertical-merged person block,
   per-level colors, `ALERT_KIND_LABELS` Chinese mapping, numeric `score`/`age`/`source_row`,
   `freeze_panes` + `autofilter`, and the progress callback contract.
 - TypeScript tests for search across identity/household/alert text, level/alert filters, and first render of browser preview.
