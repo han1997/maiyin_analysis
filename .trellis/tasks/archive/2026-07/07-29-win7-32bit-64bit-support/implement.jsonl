@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "tauri.conf.json bundle config we modify (minimumSystemVersion, webviewInstallMode); export_result command signature; build/config conventions for the Tauri desktop app."}
+{"file": ".trellis/tasks/archive/2026-07/07-15-tauri-refactor-maiyin-analysis/research/tauri-migration.md", "reason": "Documents the Tauri 2 migration: toolchain (rustc 1.96 x86_64-pc-windows-msvc), WebView2 hard dependency, build commands (tauri build --no-bundle), and Win7 EOL findings — the basis for the Win10+ minimum decision."}

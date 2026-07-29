@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Verify tauri.conf.json bundle.windows now has minimumSystemVersion 10.0.17763; verify webviewInstallMode unchanged; verify no WorkspaceSnapshot/OperationResult DTO changes."}
+{"file": ".trellis/tasks/archive/2026-07/07-15-tauri-refactor-maiyin-analysis/research/tauri-migration.md", "reason": "Verify the Win10+ minimum decision aligns with the documented WebView2 EOL finding; verify rust-toolchain.toml channel matches the documented stable toolchain."}
