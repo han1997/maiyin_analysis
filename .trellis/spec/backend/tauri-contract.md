@@ -302,6 +302,23 @@ let key = DeduplicationKey { id_no, hotel_name, check_in, check_out, /* ... */ }
 Structured keys preserve equality semantics while avoiding the extra joined-string
 allocation in the merge/dedup hot path.
 
+> **Benchmark baseline (2026-07-29):** `benchmark_synthetic_multi_file_import_merge`
+> at `MAIYIN_BENCH_FILES=46` + `MAIYIN_BENCH_ROWS_PER_FILE=10000` (455 500
+> retained records, release build, 4-run average) measured `new_merge_ms ≈ 412 ms`
+> (current owned structured key) vs `old_merge_ms ≈ 1073 ms` (joined-string
+> baseline), a 61.6% reduction. The owned-key clone overhead is a minority
+> fraction of that 412 ms (estimated 50–180 ms; empty-string clones are free,
+> dates parse to `DateKey::Parsed`), and real-world Calamine parse of `.xlsx`/
+> `.xls` at this scale takes tens of seconds, so merge is <2% of real import
+> time. **Conclusion: the owned structured key is NOT a bottleneck at 453k+
+> scale.** A borrowed-key (`&str`) variant would require non-trivial lifetime
+> restructuring in `merge_parsed_files` (the record is moved into `records`
+> immediately after `seen.insert`, so a borrowed key would dangle) for a
+> marginal saving the benchmark does not justify. Do NOT re-investigate audit
+> item #10 (`importer-dedup-key-borrowed-or-prehashed`) unless a future
+> real-world import shows merge dominating total time; if so, re-run the
+> benchmark and compare `new_merge_ms` against realistic parse cost first.
+
 ## Scenario: analysis ownership and result filtering
 
 ### 1. Scope / Trigger
