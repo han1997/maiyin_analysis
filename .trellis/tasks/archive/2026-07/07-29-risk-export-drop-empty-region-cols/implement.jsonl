@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Export format table documents risk_xlsx as 26 cols — we're reducing to 23 by removing 3 empty region columns; verify OperationResult unchanged; verify export test requirements."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Export split loading and format pinning convention — column headers are pinned by calamine read-back tests so the test must be updated in lockstep."}

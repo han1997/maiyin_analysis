@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/tauri-contract.md", "reason": "Verify risk_xlsx column count changed 26→23, headers match (省/市/地域省市县 removed), OperationResult unchanged."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify format-pinning test updated to match new 23-col structure; verify calamine read-back still asserts the remaining columns."}
