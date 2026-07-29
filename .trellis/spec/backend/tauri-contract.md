@@ -472,3 +472,101 @@ const records = await appApi.getImportedRecords({ page: 1, pageSize: 50 });
 
 Result filters narrow the rendered `PersonSummary` collection. Only time and
 frequency settings cross the Tauri command boundary and trigger recalculation.
+
+## Scenario: Windows platform support and dual-arch builds
+
+### 1. Scope / Trigger
+
+Applies whenever the minimum Windows version, 32-bit/64-bit build targets, or
+WebView2 runtime configuration changes.
+
+### 2. Signatures
+
+```bash
+npm run tauri build                                      # 64-bit (x86_64-pc-windows-msvc)
+npm run tauri:build:32                                   # 32-bit (i686-pc-windows-msvc)
+rustup target add i686-pc-windows-msvc                    # one-time 32-bit target install
+```
+
+`rust-toolchain.toml` pins the `stable` channel; the default host triple
+(`x86_64-pc-windows-msvc`) is used for 64-bit builds, and 32-bit is selected via
+`--target i686-pc-windows-msvc` on the command line.
+
+### 3. Contracts
+
+- **Minimum OS**: Windows 10 1809 (build 10.0.17763) and above. Tauri 2 hard-depends
+  on Microsoft Edge WebView2, which stopped supporting Win7/8/8.1 in 2023-10 (last
+  compatible runtime 110.0.1587.140, EOL). The app cannot launch on Win7/8/8.1
+  because `downloadBootstrapper` cannot install a compatible WebView2 there.
+- **No `minimumSystemVersion` config field for Windows**: Tauri 2's
+  `bundle.windows` config (`WindowsConfig` in `tauri-utils`) has no
+  `minimumSystemVersion` field — that field exists only for macOS/iOS. The
+  Windows minimum is enforced in practice by the WebView2 runtime dependency, not
+  by an installer-level OS check. Do NOT add `minimumSystemVersion` to
+  `bundle.windows` — it will fail the build with `unknown field`.
+- **Dual-arch builds**: 64-bit (`x86_64-pc-windows-msvc`) is the default; 32-bit
+  (`i686-pc-windows-msvc`) is produced via `tauri build --target i686-pc-windows-msvc`.
+  Both produce NSIS + MSI installers (`bundle.targets = "all"`).
+- **32-bit C toolchain prerequisite**: `libsqlite3-sys` (bundled SQLite, via
+  `rusqlite` `bundled` feature) requires a 32-bit C compiler for the `i686`
+  target. Visual Studio Build Tools with "C++ 桌面开发" includes MSVC v143
+  x86/x64 compilers by default. All other dependencies are pure Rust and have no
+  32-bit or Win7-specific obstacles.
+- **WebView2 install mode**: `downloadBootstrapper` (silent) — on Win10+ this
+  downloads and installs the latest WebView2 runtime if missing. Keep this; do
+  not switch to `offlineInstaller` or `embedBootstrapper` unless distributing
+  offline.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| `minimumSystemVersion` added to `bundle.windows` | Build fails: `unknown field 'minimumSystemVersion'` — this field is macOS/iOS only |
+| 32-bit build without `i686-pc-windows-msvc` target installed | `rustup` error: target not installed; run `rustup target add i686-pc-windows-msvc` |
+| 32-bit build without MSVC x86 C compiler | `libsqlite3-sys` build failure; ensure VS Build Tools includes x86 C++ tools |
+| App launched on Win7/8/8.1 | WebView2 runtime cannot install (EOL); app cannot launch — documented, not installer-blocked |
+
+### 5. Good / Base / Bad Cases
+
+- Good: `npm run tauri build` produces the 64-bit installer; `npm run tauri:build:32`
+  produces the 32-bit installer after a one-time `rustup target add`.
+- Good: README documents the Win10 1809+ minimum and the WebView2 EOL rationale so
+  users do not attempt Win7 installation.
+- Bad: adding `minimumSystemVersion` to `bundle.windows` — breaks the build; the
+  field does not exist for Windows in Tauri 2.
+- Bad: pinning a target triple in `rust-toolchain.toml` — would force one arch
+  and break the other; use `--target` on the command line instead.
+
+### 6. Tests Required
+
+- 64-bit regression: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+  `cargo test`, `npm run lint`, `npm run test`, `npm run build` — all green after
+  config changes (no code changed, so these are regression-only).
+- 32-bit build smoke (manual, not in CI): `npm run tauri:build:32` produces an
+  installer without a toolchain/C-compiler error.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```json
+"windows": {
+  "minimumSystemVersion": "10.0.17763",
+  "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true }
+}
+```
+
+`minimumSystemVersion` is a macOS/iOS-only field; adding it to `bundle.windows`
+fails the Tauri build with `unknown field`.
+
+#### Correct
+
+```json
+"windows": {
+  "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true }
+}
+```
+
+The Win10 1809+ minimum is enforced by the WebView2 runtime dependency itself
+(cannot install on Win7/8/8.1), documented in the README — not by an installer
+config field.

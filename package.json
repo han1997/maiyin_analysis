@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "vitest run",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:build": "tauri build",
+    "tauri:build:32": "tauri build --target i686-pc-windows-msvc"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

@@ -57,9 +57,11 @@ npm install --registry=https://registry.npmmirror.com
 
 ## Tauri 桌面运行
 
+> 最低系统要求：Windows 10 1809（内部版本 10.0.17763）及以上。Tauri 2 强依赖 Microsoft Edge WebView2，而 WebView2 已于 2023-10 停止对 Windows 7/8/8.1 的支持，因此本应用不支持 Win7/8/8.1。
+
 Windows 需要：
 
-1. Microsoft C++ Build Tools，包含“使用 C++ 的桌面开发”。
+1. Microsoft C++ Build Tools，包含“使用 C++ 的桌面开发”（默认同时提供 x86 和 x64 两套 MSVC v143 编译器，32 位构建会用到其中的 x86 C 编译器，用于 `libsqlite3-sys` 内置编译 SQLite）。
 2. Microsoft Edge WebView2 Runtime。
 3. Rust stable 工具链。
 
@@ -85,8 +87,25 @@ npm run tauri dev
 构建安装包：
 
 ```powershell
+# 64 位（默认）
 npm run tauri build
+# 或等价别名
+npm run tauri:build
 ```
+
+构建 32 位安装包前，一次性安装 32 位目标（需已安装 Rustup）：
+
+```powershell
+rustup target add i686-pc-windows-msvc
+```
+
+然后构建 32 位包：
+
+```powershell
+npm run tauri:build:32
+```
+
+32 位构建需要 Visual Studio Build Tools 中包含的 MSVC v143 x86 C 编译器（默认随“使用 C++ 的桌面开发”安装）。除 `libsqlite3-sys`（内置编译 SQLite）外，其余依赖全部为纯 Rust，无 32 位独立障碍。
 
 ## 质量检查
 
