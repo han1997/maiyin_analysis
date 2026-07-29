@@ -1264,3 +1264,36 @@ lib.rs:39 .expect() 改 .unwrap_or_else() 输出完整 tauri::Error Display 到 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 39: Task: 风险导出去除空的省市地域列
+
+**Date**: 2026-07-29
+**Task**: Task: 风险导出去除空的省市地域列
+**Branch**: `main`
+
+### Summary
+
+从 risk_xlsx 导出去除始终为空的省、市、地域省市县三列（26→23列）。headers 数组、evidence detail 数组（移除 record.province/city/region，保留 record.county）、col 偏移、blank-evidence fallback 范围(14..=22)、autofilter 范围(末列 25→22) 同步调整。测试断言更新：header 读取范围 0..23、新增 header[19]=='县区' 断言、header[22]=='登记时间'。其它导出格式不动。质量门全绿：cargo fmt/clippy/test(50 passed)、npm lint/test(37 passed)/build。spec: tauri-contract.md risk_xlsx 列数 26→23 + 测试要求同步。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5a848de` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

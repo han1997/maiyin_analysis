@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 38
+- **Total Sessions**: 39
 - **Last Active**: 2026-07-29
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1266 | Active |
+| `journal-1.md` | ~1299 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 39 | 2026-07-29 | Task: 风险导出去除空的省市地域列 | `5a848de` | `main` |
 | 38 | 2026-07-29 | Task: 导出性能优化与进度反馈与中文化 | `ad83a69` | `main` |
 | 37 | 2026-07-28 | Task: 导入分析进度条与默认最大化启动 | `3abc254` | `main` |
 | 36 | 2026-07-28 | Task #4: analysis-overlap-scanline-for-dense-persons | `4606419` | `main` |
